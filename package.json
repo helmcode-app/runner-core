@@ -1,0 +1,38 @@
+{
+  "name": "@helmcode/runner-core",
+  "version": "0.1.0",
+  "description": "Headless AI agent orchestration engine for HelmCode — Git worktree isolation, self-healing tests, dual-mode (open-core / commercial-saas).",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "main": "./dist/entrypoint.js",
+  "types": "./dist/entrypoint.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/entrypoint.d.ts",
+      "import": "./dist/entrypoint.js"
+    }
+  },
+  "bin": {
+    "helm-runner": "./dist/entrypoint.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "dev": "tsx watch src/entrypoint.ts",
+    "start": "node dist/entrypoint.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

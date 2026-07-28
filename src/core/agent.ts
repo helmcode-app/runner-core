@@ -7,6 +7,11 @@ import type {
   ProgressCallback,
   TestAttempt,
 } from "../types.js";
+import {
+  isTaskAbortedError,
+  TaskAbortedError,
+  throwIfAborted,
+} from "../util/errors.js";
 import { listFiles } from "../util/fs.js";
 import { GitOrchestrator } from "./git.js";
 import { LlmClient } from "./llm.js";
@@ -26,6 +31,8 @@ export interface AgentOptions {
 /**
  * Advanced agentic pipeline:
  *   fetch → worktree → LLM patch → self-healing test loop → commit → push → cleanup
+ *
+ * Supports cooperative cancel via AbortController and hard wall-clock timeout.
  */
 export class AgentPipeline {
   private readonly git: GitOrchestrator;
@@ -33,6 +40,7 @@ export class AgentPipeline {
   private readonly log: Logger;
   private readonly onProgress: ProgressCallback | undefined;
   private readonly active = new Set<string>();
+  private readonly controllers = new Map<string, AbortController>();
 
   constructor(private readonly opts: AgentOptions) {
     this.log = opts.logger.child({ component: "agent" });
@@ -43,6 +51,15 @@ export class AgentPipeline {
 
   get activeTaskCount(): number {
     return this.active.size;
+  }
+
+  /** Returns true if a running task was signalled to abort. */
+  cancel(taskId: string, reason = "cancelled by client"): boolean {
+    const controller = this.controllers.get(taskId);
+    if (!controller || controller.signal.aborted) return false;
+    this.log.info("cancel requested", { taskId, reason });
+    controller.abort(new TaskAbortedError("cancelled", reason));
+    return true;
   }
 
   async run(taskInput: AgentTask): Promise<AgentResult> {
@@ -60,10 +77,37 @@ export class AgentPipeline {
     const maxRetries = config.MAX_TEST_RETRIES;
     const testAttempts: TestAttempt[] = [];
 
+    const controller = new AbortController();
+    this.controllers.set(task.id, controller);
+    const signal = controller.signal;
+
+    const budgetMs =
+      task.timeoutMs !== undefined
+        ? task.timeoutMs
+        : config.TASK_TIMEOUT_MS > 0
+          ? config.TASK_TIMEOUT_MS
+          : undefined;
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    if (budgetMs !== undefined && budgetMs > 0) {
+      timeoutHandle = setTimeout(() => {
+        if (!controller.signal.aborted) {
+          controller.abort(
+            new TaskAbortedError(
+              "timeout",
+              `task timed out after ${budgetMs}ms`,
+            ),
+          );
+        }
+      }, budgetMs);
+      timeoutHandle.unref?.();
+    }
+
     this.active.add(task.id);
     this.emit(task.id, "running", "task accepted", {
       baseBranch,
       mainRepoPath,
+      ...(budgetMs !== undefined ? { timeoutMs: budgetMs } : {}),
     });
 
     let worktreePath = "";
@@ -71,12 +115,15 @@ export class AgentPipeline {
     let commitSha: string | undefined;
 
     try {
+      throwIfAborted(signal);
+
       // 1) Isolated worktree on aero-agent/<task_id>
       const handle = await this.git.createWorktree({
         taskId: task.id,
         mainRepoPath,
         baseBranch,
         remote,
+        signal,
         ...(token !== undefined ? { token } : {}),
       });
       worktreePath = handle.worktreePath;
@@ -85,6 +132,7 @@ export class AgentPipeline {
         worktreePath,
         branch,
       });
+      throwIfAborted(signal);
 
       // 2) Resolve test command
       const detected = task.testCommand
@@ -101,7 +149,9 @@ export class AgentPipeline {
         worktreePath,
         attempt: 1,
         maxAttempts: maxRetries,
+        signal,
       });
+      throwIfAborted(signal);
 
       // 4) Self-healing recursive test loop (up to MAX_TEST_RETRIES)
       const green = await this.selfHealingTestLoop({
@@ -110,7 +160,9 @@ export class AgentPipeline {
         testCommand: detected.command,
         maxRetries,
         testAttempts,
+        signal,
       });
+      throwIfAborted(signal);
 
       if (!green) {
         const last = testAttempts[testAttempts.length - 1];
@@ -127,6 +179,7 @@ export class AgentPipeline {
       commitSha = await this.git.commit(
         worktreePath,
         `aero-agent: ${task.id}\n\n${task.prompt.slice(0, 500)}`,
+        signal,
       );
       this.emit(task.id, "pushing", "pushing branch to remote", {
         branch,
@@ -136,6 +189,7 @@ export class AgentPipeline {
         worktreePath,
         branch,
         remote,
+        signal,
         ...(token !== undefined ? { token } : {}),
       });
 
@@ -159,6 +213,29 @@ export class AgentPipeline {
       });
       return result;
     } catch (err) {
+      if (isTaskAbortedError(err)) {
+        const status = "cancelled" as const;
+        this.log.warn("task aborted", {
+          taskId: task.id,
+          code: err.code,
+          error: err.message,
+        });
+        this.emit(task.id, "cancelled", err.message, { code: err.code });
+        return {
+          taskId: task.id,
+          status,
+          branch: branch || `aero-agent/${task.id}`,
+          worktreePath: worktreePath || "",
+          ...(commitSha !== undefined ? { commitSha } : {}),
+          testAttempts,
+          summary: err.code === "timeout" ? "task timed out" : "task cancelled",
+          error: err.message,
+          startedAt: startedAt.toISOString(),
+          finishedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedMs,
+        };
+      }
+
       const message = err instanceof Error ? err.message : String(err);
       this.log.error("task failed", { taskId: task.id, error: message });
       this.emit(task.id, "failed", message);
@@ -176,6 +253,8 @@ export class AgentPipeline {
         durationMs: Date.now() - startedMs,
       };
     } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      this.controllers.delete(task.id);
       // 6) Always reclaim disk: git worktree remove
       if (worktreePath) {
         try {
@@ -206,20 +285,24 @@ export class AgentPipeline {
     testCommand: string;
     maxRetries: number;
     testAttempts: TestAttempt[];
+    signal: AbortSignal;
     attempt?: number;
   }): Promise<boolean> {
+    throwIfAborted(params.signal);
     const attempt = params.attempt ?? 1;
     this.emit(params.task.id, "testing", `test attempt ${attempt}/${params.maxRetries}`, {
       testCommand: params.testCommand,
     });
 
+    // Per-test command timeout is capped by remaining overall budget when set.
     const result = await runTests(
       params.worktreePath,
       params.testCommand,
       this.log,
-      params.task.timeoutMs !== undefined
-        ? { timeoutMs: params.task.timeoutMs }
-        : {},
+      {
+        signal: params.signal,
+        timeoutMs: 600_000,
+      },
     );
 
     if (result.exitCode === 0) {
@@ -238,6 +321,7 @@ export class AgentPipeline {
       return false;
     }
 
+    throwIfAborted(params.signal);
     this.emit(params.task.id, "healing", `healing from test failure (attempt ${attempt})`);
     await this.applyLlmTurn({
       task: params.task,
@@ -245,6 +329,7 @@ export class AgentPipeline {
       attempt: attempt + 1,
       maxAttempts: params.maxRetries,
       testFailureLog: failureLog,
+      signal: params.signal,
     });
     params.testAttempts.push({ attempt, result, healed: true });
 
@@ -259,8 +344,10 @@ export class AgentPipeline {
     worktreePath: string;
     attempt: number;
     maxAttempts: number;
+    signal: AbortSignal;
     testFailureLog?: string;
   }): Promise<void> {
+    throwIfAborted(params.signal);
     const fileTree = await listFiles(params.worktreePath, {
       maxDepth: 5,
       maxFiles: 400,
@@ -279,10 +366,13 @@ export class AgentPipeline {
       files,
       attempt: params.attempt,
       maxAttempts: params.maxAttempts,
+      signal: params.signal,
       ...(params.testFailureLog !== undefined
         ? { testFailureLog: params.testFailureLog }
         : {}),
     });
+
+    throwIfAborted(params.signal);
 
     if (response.giveUp) {
       throw new Error(

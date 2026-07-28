@@ -99,7 +99,7 @@ interface AgentTask {
 | `githubToken` | `string` | no | Per-task GitHub token for fetch/push (else `GITHUB_TOKEN`). |
 | `remote` | `string` | no | Git remote name (default `origin`). |
 | `contextPaths` | `string[]` | no | Relative paths for LLM context. |
-| `timeoutMs` | `number` | no | Soft wall-clock budget for test runs (ms). |
+| `timeoutMs` | `number` | no | Hard wall-clock budget for the entire run (ms). Aborts with `cancelled` when exceeded. |
 | `metadata` | `object` | no | Opaque metadata. |
 
 ---

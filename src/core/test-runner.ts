@@ -61,13 +61,14 @@ export async function runTests(
   worktreeRoot: string,
   testCommand: string,
   log: Logger,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<CommandResult> {
   log.info("running tests", { testCommand, cwd: worktreeRoot });
   const result = await runShell(testCommand, {
     cwd: worktreeRoot,
     timeoutMs: opts.timeoutMs ?? 600_000,
     maxOutputChars: 512 * 1024,
+    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
   log.info("tests finished", {
     exitCode: result.exitCode,

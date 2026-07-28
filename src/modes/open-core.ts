@@ -4,7 +4,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../config.js";
 import { AgentPipeline } from "../core/agent.js";
 import type { Logger } from "../logger.js";
@@ -13,12 +13,15 @@ import type {
   HealthStatus,
   OpenCoreSubmitBody,
   TaskProgressEvent,
+  TaskStatus,
 } from "../types.js";
 
 interface TaskRecord {
   result?: AgentResult;
   events: TaskProgressEvent[];
   promise: Promise<AgentResult>;
+  /** Latest non-terminal status for polling while in flight. */
+  liveStatus: TaskStatus;
 }
 
 export interface OpenCoreServer {
@@ -33,6 +36,9 @@ export interface OpenCoreServer {
 /**
  * Standalone monolithic API for the iPad / local client (HELM_MODE=open-core).
  * Listens on PORT (default 8080; 0 = ephemeral). No commercial billing/routing.
+ *
+ * Auth: when OPENCORE_API_TOKEN is set, all routes except GET /health require
+ * `Authorization: Bearer <token>`.
  */
 export async function startOpenCore(
   config: AppConfig,
@@ -42,13 +48,30 @@ export async function startOpenCore(
   const log = logger.child({ component: "open-core" });
   const tasks = new Map<string, TaskRecord>();
   const installSignals = opts.installSignalHandlers !== false;
+  const apiToken = config.OPENCORE_API_TOKEN?.trim() || undefined;
+
+  if (!apiToken) {
+    log.warn(
+      "OPENCORE_API_TOKEN unset — open-core HTTP API is unauthenticated (dev only)",
+    );
+  } else {
+    log.info("open-core API auth enabled (Bearer token)");
+  }
 
   const agent = new AgentPipeline({
     config,
     logger,
     onProgress: (event) => {
       const rec = tasks.get(event.taskId);
-      if (rec) rec.events.push(event);
+      if (!rec) return;
+      rec.events.push(event);
+      if (
+        event.status !== "succeeded" &&
+        event.status !== "failed" &&
+        event.status !== "cancelled"
+      ) {
+        rec.liveStatus = event.status;
+      }
     },
   });
 
@@ -69,6 +92,7 @@ export async function startOpenCore(
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const method = (req.method ?? "GET").toUpperCase();
 
+    // Public liveness — no auth (Docker/K8s probes).
     if (method === "GET" && url.pathname === "/health") {
       const body: HealthStatus = {
         ok: true,
@@ -81,12 +105,18 @@ export async function startOpenCore(
       return;
     }
 
+    if (!authorize(req, apiToken)) {
+      sendJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
     if (method === "GET" && url.pathname === "/v1/status") {
       sendJson(res, 200, {
         mode: config.mode,
         version: config.version,
         activeTasks: agent.activeTaskCount,
         knownTasks: tasks.size,
+        authRequired: Boolean(apiToken),
       });
       return;
     }
@@ -107,30 +137,54 @@ export async function startOpenCore(
       const record: TaskRecord = {
         events: [],
         promise: Promise.resolve({} as AgentResult),
+        liveStatus: "queued",
       };
       tasks.set(id, record);
 
       record.promise = agent
-        .run({
-          id,
-          prompt: body.prompt,
-          ...(body.baseBranch !== undefined ? { baseBranch: body.baseBranch } : {}),
-          ...(body.testCommand !== undefined ? { testCommand: body.testCommand } : {}),
-          ...(body.contextPaths !== undefined ? { contextPaths: body.contextPaths } : {}),
-          ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
-        })
+        .run(submitToTask(id, body))
         .then((result) => {
           record.result = result;
+          record.liveStatus = result.status;
           return result;
         });
 
-      // Fire-and-forget retention: keep result for polling clients.
       void record.promise.catch(() => undefined);
 
       sendJson(res, 202, {
         id,
         status: "queued",
         poll: `/v1/tasks/${id}`,
+        cancel: `/v1/tasks/${id}/cancel`,
+      });
+      return;
+    }
+
+    const cancelMatch = url.pathname.match(/^\/v1\/tasks\/([^/]+)\/cancel$/);
+    if (method === "POST" && cancelMatch) {
+      const id = decodeURIComponent(cancelMatch[1] ?? "");
+      const rec = tasks.get(id);
+      if (!rec) {
+        sendJson(res, 404, { error: "task not found" });
+        return;
+      }
+      if (rec.result) {
+        sendJson(res, 409, {
+          error: "task already finished",
+          status: rec.result.status,
+        });
+        return;
+      }
+      const accepted = agent.cancel(id, "cancelled by client");
+      if (!accepted) {
+        sendJson(res, 409, { error: "task is not cancellable" });
+        return;
+      }
+      rec.liveStatus = "cancelled";
+      sendJson(res, 202, {
+        id,
+        status: "cancelled",
+        message: "cancel signal sent",
       });
       return;
     }
@@ -145,7 +199,7 @@ export async function startOpenCore(
       }
       sendJson(res, 200, {
         id,
-        status: rec.result?.status ?? "running",
+        status: rec.result?.status ?? rec.liveStatus,
         result: rec.result ?? null,
         events: rec.events,
       });
@@ -153,22 +207,21 @@ export async function startOpenCore(
     }
 
     if (method === "POST" && url.pathname === "/v1/tasks/sync") {
-      // Synchronous convenience path for simple clients / integration tests.
       const body = (await readJson(req)) as OpenCoreSubmitBody;
       if (!body || typeof body.prompt !== "string" || !body.prompt.trim()) {
         sendJson(res, 400, { error: "prompt is required" });
         return;
       }
       const id = body.id?.trim() || randomUUID();
-      const result = await agent.run({
-        id,
-        prompt: body.prompt,
-        ...(body.baseBranch !== undefined ? { baseBranch: body.baseBranch } : {}),
-        ...(body.testCommand !== undefined ? { testCommand: body.testCommand } : {}),
-        ...(body.contextPaths !== undefined ? { contextPaths: body.contextPaths } : {}),
-        ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
-      });
-      sendJson(res, result.status === "succeeded" ? 200 : 422, result);
+      const result = await agent.run(submitToTask(id, body));
+      // 200 succeeded · 409 cancelled · 422 failed
+      const httpStatus =
+        result.status === "succeeded"
+          ? 200
+          : result.status === "cancelled"
+            ? 409
+            : 422;
+      sendJson(res, httpStatus, result);
       return;
     }
 
@@ -215,6 +268,40 @@ export async function startOpenCore(
     agent,
     close,
   };
+}
+
+function submitToTask(id: string, body: OpenCoreSubmitBody) {
+  return {
+    id,
+    prompt: body.prompt,
+    ...(body.baseBranch !== undefined ? { baseBranch: body.baseBranch } : {}),
+    ...(body.testCommand !== undefined ? { testCommand: body.testCommand } : {}),
+    ...(body.contextPaths !== undefined ? { contextPaths: body.contextPaths } : {}),
+    ...(body.timeoutMs !== undefined ? { timeoutMs: body.timeoutMs } : {}),
+    ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+  };
+}
+
+/**
+ * When expectedToken is undefined, allow all requests (dev).
+ * Otherwise require Authorization: Bearer <token> with constant-time compare.
+ */
+export function authorize(
+  req: IncomingMessage,
+  expectedToken: string | undefined,
+): boolean {
+  if (!expectedToken) return true;
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) return false;
+  const got = header.slice("Bearer ".length).trim();
+  const a = Buffer.from(got);
+  const b = Buffer.from(expectedToken);
+  if (a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

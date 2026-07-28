@@ -33,6 +33,8 @@ export function testConfig(overrides: Record<string, string> = {}): AppConfig {
     DEFAULT_BASE_BRANCH: "main",
     GIT_USER_NAME: "Test Agent",
     GIT_USER_EMAIL: "test@helmcode.app",
+    // Disable default budget in tests unless overridden.
+    TASK_TIMEOUT_MS: "0",
     ...overrides,
   });
 }

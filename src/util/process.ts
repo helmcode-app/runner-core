@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { CommandResult } from "../types.js";
+import { abortReasonToError, throwIfAborted } from "./errors.js";
 
 export interface RunCommandOptions {
   cwd: string;
@@ -8,6 +9,8 @@ export interface RunCommandOptions {
   /** Max characters retained for stdout/stderr (default 512 KiB). */
   maxOutputChars?: number;
   input?: string;
+  /** When aborted, the child is SIGKILL'd and the promise rejects with TaskAbortedError. */
+  signal?: AbortSignal;
 }
 
 function truncate(s: string, max: number): string {
@@ -19,13 +22,15 @@ function truncate(s: string, max: number): string {
 
 /**
  * Spawn a process and collect stdout/stderr. Never throws on non-zero exit;
- * throws only on spawn failure or timeout.
+ * throws on spawn failure, command timeout, or AbortSignal.
  */
 export function runCommand(
   command: string,
   args: string[],
   options: RunCommandOptions,
 ): Promise<CommandResult> {
+  throwIfAborted(options.signal);
+
   const maxOutput = options.maxOutputChars ?? 512 * 1024;
   const started = Date.now();
   const display = [command, ...args].join(" ");
@@ -41,7 +46,18 @@ export function runCommand(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
     let settled = false;
+
+    const cleanup = (): void => {
+      if (timer) clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+    };
+
+    const onAbort = (): void => {
+      aborted = true;
+      child.kill("SIGKILL");
+    };
 
     const timer =
       options.timeoutMs !== undefined
@@ -50,6 +66,14 @@ export function runCommand(
             child.kill("SIGKILL");
           }, options.timeoutMs)
         : undefined;
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        onAbort();
+      } else {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -68,14 +92,18 @@ export function runCommand(
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
+      cleanup();
       reject(err);
     });
 
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
+      cleanup();
+      if (aborted) {
+        reject(abortReasonToError(options.signal?.reason));
+        return;
+      }
       if (timedOut) {
         reject(
           new Error(

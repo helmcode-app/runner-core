@@ -59,9 +59,11 @@ describe("open-core HTTP API", () => {
     const body = (await res.json()) as {
       mode: string;
       knownTasks: number;
+      authRequired: boolean;
     };
     assert.equal(body.mode, "open-core");
     assert.equal(typeof body.knownTasks, "number");
+    assert.equal(body.authRequired, false);
   });
 
   it("POST /v1/tasks rejects empty prompt", async () => {

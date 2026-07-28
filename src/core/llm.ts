@@ -1,6 +1,7 @@
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { FilePatch, LlmPatchResponse } from "../types.js";
+import { abortReasonToError, throwIfAborted } from "../util/errors.js";
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant";
@@ -17,6 +18,7 @@ export interface GeneratePatchesInput {
   testFailureLog?: string;
   attempt: number;
   maxAttempts: number;
+  signal?: AbortSignal;
 }
 
 interface ChatCompletionResponse {
@@ -51,11 +53,15 @@ export class LlmClient {
   ) {}
 
   async generatePatches(input: GeneratePatchesInput): Promise<LlmPatchResponse> {
+    throwIfAborted(input.signal);
     const user = this.buildUserPrompt(input);
-    const raw = await this.chat([
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: user },
-    ]);
+    const raw = await this.chat(
+      [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: user },
+      ],
+      input.signal,
+    );
     return parseLlmPatchResponse(raw);
   }
 
@@ -86,7 +92,11 @@ export class LlmClient {
     return sections.join("\n\n");
   }
 
-  private async chat(messages: LlmMessage[]): Promise<string> {
+  private async chat(
+    messages: LlmMessage[],
+    externalSignal?: AbortSignal,
+  ): Promise<string> {
+    throwIfAborted(externalSignal);
     const apiKey = this.config.LLM_API_KEY;
     if (!apiKey) {
       // Deterministic offline path for sandboxes without LLM credentials.
@@ -102,9 +112,16 @@ export class LlmClient {
     const url = `${this.config.LLM_BASE_URL.replace(/\/$/, "")}/chat/completions`;
     const controller = new AbortController();
     const timer = setTimeout(
-      () => controller.abort(),
+      () => controller.abort(new Error("LLM request timed out")),
       this.config.LLM_TIMEOUT_MS,
     );
+    const onExternalAbort = (): void => {
+      controller.abort(externalSignal?.reason);
+    };
+    if (externalSignal) {
+      if (externalSignal.aborted) onExternalAbort();
+      else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+    }
 
     try {
       this.log.debug("llm request", {
@@ -147,8 +164,14 @@ export class LlmClient {
         throw new Error("LLM response missing choices[0].message.content");
       }
       return content;
+    } catch (err) {
+      if (externalSignal?.aborted) {
+        throw abortReasonToError(externalSignal.reason);
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
+      externalSignal?.removeEventListener("abort", onExternalAbort);
     }
   }
 

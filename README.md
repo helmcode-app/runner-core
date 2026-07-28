@@ -95,11 +95,14 @@ Full request/response schemas (English):
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness |
+| `GET` | `/health` | Liveness (no auth) |
 | `GET` | `/v1/status` | Runtime status |
 | `POST` | `/v1/tasks` | Async submit → `202` |
 | `GET` | `/v1/tasks/:id` | Poll task + events |
+| `POST` | `/v1/tasks/:id/cancel` | Cancel in-flight task |
 | `POST` | `/v1/tasks/sync` | Synchronous run |
+
+Auth: set `OPENCORE_API_TOKEN` and send `Authorization: Bearer <token>`. Hard timeout: `TASK_TIMEOUT_MS` or per-task `timeoutMs`.
 
 ### commercial-saas JSON-RPC (summary)
 

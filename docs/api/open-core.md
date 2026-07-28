@@ -7,7 +7,7 @@ Standalone monolithic HTTP API for local / iPad clients.
 | Mode | `HELM_MODE=open-core` |
 | Default bind | `0.0.0.0:8080` (`HOST` / `PORT`) |
 | Content type | `application/json; charset=utf-8` |
-| Auth | None (sandbox-local; no commercial billing/routing) |
+| Auth | Optional Bearer (`OPENCORE_API_TOKEN`). When set, all routes **except** `GET /health` require `Authorization: Bearer <token>`. When unset, API is open (dev only). |
 | Body size limit | 2 MiB |
 | Implementation | `src/modes/open-core.ts` |
 
@@ -17,13 +17,16 @@ Shared schemas: [shared-types.md](./shared-types.md).
 
 ## Overview
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Process liveness |
-| `GET` | `/v1/status` | Runtime status |
-| `POST` | `/v1/tasks` | Async task submit (`202`) |
-| `GET` | `/v1/tasks/:id` | Poll task status, result, events |
-| `POST` | `/v1/tasks/sync` | Synchronous task run (blocks until done) |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | no | Process liveness |
+| `GET` | `/v1/status` | yes* | Runtime status |
+| `POST` | `/v1/tasks` | yes* | Async task submit (`202`) |
+| `GET` | `/v1/tasks/:id` | yes* | Poll task status, result, events |
+| `POST` | `/v1/tasks/:id/cancel` | yes* | Cancel in-flight task |
+| `POST` | `/v1/tasks/sync` | yes* | Synchronous task run (blocks until done) |
+
+\* Required only when `OPENCORE_API_TOKEN` is configured. Missing/invalid token → `401 {"error":"unauthorized"}`.
 
 Common response headers:
 
@@ -135,6 +138,7 @@ Asynchronously submit an agent task. Returns immediately with a poll URL; the pi
 | `baseBranch` | `string` | no | Base branch |
 | `testCommand` | `string` | no | Test command override |
 | `contextPaths` | `string[]` | no | LLM context file paths |
+| `timeoutMs` | `number` | no | Hard overall timeout (ms). Default: env `TASK_TIMEOUT_MS` (900000). `0` on env disables default. |
 | `metadata` | `object` | no | Opaque metadata |
 
 ```json
@@ -164,7 +168,8 @@ Task accepted; pipeline started asynchronously.
 {
   "id": "task-001",
   "status": "queued",
-  "poll": "/v1/tasks/task-001"
+  "poll": "/v1/tasks/task-001",
+  "cancel": "/v1/tasks/task-001/cancel"
 }
 ```
 
@@ -292,6 +297,48 @@ Poll task status, terminal result, and accumulated progress events.
 
 ---
 
+## `POST /v1/tasks/:id/cancel`
+
+Request cooperative abort of an in-flight task. In-flight subprocesses (tests, git, LLM HTTP) are killed via `AbortSignal`. Worktree cleanup still runs.
+
+### Request
+
+| Item | Value |
+|------|-------|
+| Method | `POST` |
+| Path | `/v1/tasks/:id/cancel` |
+| Body | none |
+
+### Responses
+
+#### `202 Accepted`
+
+```json
+{
+  "id": "task-001",
+  "status": "cancelled",
+  "message": "cancel signal sent"
+}
+```
+
+Poll `GET /v1/tasks/:id` until `result.status === "cancelled"`.
+
+#### `404 Not Found`
+
+```json
+{ "error": "task not found" }
+```
+
+#### `409 Conflict`
+
+Task already finished or not cancellable.
+
+```json
+{ "error": "task already finished", "status": "succeeded" }
+```
+
+---
+
 ## `POST /v1/tasks/sync`
 
 Synchronous convenience endpoint. Blocks until the agent pipeline finishes, then returns the full [`AgentResult`](./shared-types.md#agentresult).
@@ -326,9 +373,15 @@ Intended for simple clients and integration tests. Prefer `POST /v1/tasks` + pol
 
 ### Responses
 
-#### `200 OK`
+#### `200 OK` / `409 Conflict` / `422 Unprocessable Entity`
 
-Pipeline finished with `status: "succeeded"`. Body is a full [`AgentResult`](./shared-types.md#agentresult).
+| Status | `AgentResult.status` |
+|--------|----------------------|
+| `200` | `succeeded` |
+| `409` | `cancelled` (client cancel or hard timeout) |
+| `422` | `failed` |
+
+Body is a full [`AgentResult`](./shared-types.md#agentresult).
 
 ```json
 {
@@ -346,27 +399,7 @@ Pipeline finished with `status: "succeeded"`. Body is a full [`AgentResult`](./s
 }
 ```
 
-#### `422 Unprocessable Entity`
-
-Pipeline finished with a non-success terminal status (typically `failed`). Body is still a full [`AgentResult`](./shared-types.md#agentresult) including `error`.
-
-```json
-{
-  "taskId": "3f2a9c1e-…",
-  "status": "failed",
-  "branch": "aero-agent/3f2a9c1e-…",
-  "worktreePath": "/app/workspaces/ws_3f2a9c1e-…",
-  "testAttempts": [],
-  "summary": "task failed",
-  "error": "tests still failing after 3 attempt(s)\n…",
-  "startedAt": "2026-07-27T12:00:00.000Z",
-  "finishedAt": "2026-07-27T12:08:30.000Z",
-  "durationMs": 210000
-}
-```
-
 #### `400 Bad Request`
-
 ```json
 { "error": "prompt is required" }
 ```

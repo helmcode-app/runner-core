@@ -30,7 +30,10 @@ export interface AgentTask {
   remote?: string;
   /** Extra context files the LLM may inspect (relative to worktree). */
   contextPaths?: string[];
-  /** Soft wall-clock budget in ms (informational; not hard-killed). */
+  /**
+   * Hard wall-clock budget for the entire agent run (ms).
+   * When exceeded the pipeline aborts (kills in-flight subprocesses) with status `cancelled`.
+   */
   timeoutMs?: number;
   /** Opaque metadata echoed in status events. */
   metadata?: Record<string, unknown>;
@@ -125,6 +128,8 @@ export interface OpenCoreSubmitBody {
   baseBranch?: string;
   testCommand?: string;
   contextPaths?: string[];
+  /** Hard overall timeout in ms (falls back to env TASK_TIMEOUT_MS). */
+  timeoutMs?: number;
   metadata?: Record<string, unknown>;
 }
 

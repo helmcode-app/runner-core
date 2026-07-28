@@ -23,6 +23,17 @@ const envSchema = z.object({
   GIT_USER_EMAIL: z.string().email().default("agent@helmcode.app"),
   DEFAULT_BASE_BRANCH: z.string().min(1).default("main"),
   MAX_TEST_RETRIES: z.coerce.number().int().min(1).max(10).default(3),
+  /**
+   * Default hard wall-clock budget per agent task (ms).
+   * Overridden per-task via `timeoutMs`. 0 disables the default budget.
+   */
+  TASK_TIMEOUT_MS: z.coerce.number().int().min(0).default(900_000),
+  /**
+   * Bearer token for open-core HTTP API.
+   * When set, all routes except GET /health require `Authorization: Bearer <token>`.
+   * When unset, auth is disabled (local/dev only — log a warning at boot).
+   */
+  OPENCORE_API_TOKEN: z.string().optional(),
   LOG_LEVEL: z
     .enum(["debug", "info", "warn", "error"])
     .default("info"),

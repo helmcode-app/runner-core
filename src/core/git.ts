@@ -68,12 +68,18 @@ export class GitOrchestrator {
     }
   }
 
-  async fetch(mainRepoPath: string, remote = "origin", token?: string): Promise<void> {
+  async fetch(
+    mainRepoPath: string,
+    remote = "origin",
+    token?: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     this.log.info("git fetch", { mainRepoPath, remote });
     await runCommandOrThrow("git", ["fetch", "--prune", "--tags", remote], {
       cwd: mainRepoPath,
       env: this.gitEnv(token),
       timeoutMs: 120_000,
+      ...(signal !== undefined ? { signal } : {}),
     });
   }
 
@@ -83,6 +89,7 @@ export class GitOrchestrator {
     baseBranch: string;
     remote?: string;
     token?: string;
+    signal?: AbortSignal;
   }): Promise<WorktreeHandle> {
     const remote = params.remote ?? "origin";
     const branch = branchNameForTask(params.taskId);
@@ -93,7 +100,12 @@ export class GitOrchestrator {
 
     await ensureDir(this.config.WORKSPACES_PATH);
     await this.ensureMainRepo(params.mainRepoPath);
-    await this.fetch(params.mainRepoPath, remote, params.token);
+    await this.fetch(
+      params.mainRepoPath,
+      remote,
+      params.token,
+      params.signal,
+    );
 
     // Drop stale worktree / branch if a previous run left debris.
     await this.forceCleanup(params.mainRepoPath, worktreePath, branch);
@@ -112,6 +124,7 @@ export class GitOrchestrator {
         cwd: params.mainRepoPath,
         env: this.gitEnv(params.token),
         timeoutMs: 60_000,
+        ...(params.signal !== undefined ? { signal: params.signal } : {}),
       },
     );
 
@@ -124,38 +137,52 @@ export class GitOrchestrator {
     };
   }
 
-  async statusPorcelain(worktreePath: string): Promise<string> {
+  async statusPorcelain(
+    worktreePath: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const r = await runCommandOrThrow("git", ["status", "--porcelain"], {
       cwd: worktreePath,
+      ...(signal !== undefined ? { signal } : {}),
     });
     return r.stdout.trim();
   }
 
-  async addAll(worktreePath: string): Promise<void> {
-    await runCommandOrThrow("git", ["add", "-A"], { cwd: worktreePath });
+  async addAll(worktreePath: string, signal?: AbortSignal): Promise<void> {
+    await runCommandOrThrow("git", ["add", "-A"], {
+      cwd: worktreePath,
+      ...(signal !== undefined ? { signal } : {}),
+    });
   }
 
-  async commit(worktreePath: string, message: string): Promise<string | undefined> {
-    const status = await this.statusPorcelain(worktreePath);
+  async commit(
+    worktreePath: string,
+    message: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const status = await this.statusPorcelain(worktreePath, signal);
     if (!status) {
       this.log.warn("nothing to commit", { worktreePath });
       const head = await runCommandOrThrow("git", ["rev-parse", "HEAD"], {
         cwd: worktreePath,
+        ...(signal !== undefined ? { signal } : {}),
       });
       return head.stdout.trim();
     }
 
-    await this.addAll(worktreePath);
+    await this.addAll(worktreePath, signal);
     await runCommandOrThrow(
       "git",
       ["commit", "-m", message, "--no-gpg-sign"],
       {
         cwd: worktreePath,
         env: this.gitEnv(),
+        ...(signal !== undefined ? { signal } : {}),
       },
     );
     const head = await runCommandOrThrow("git", ["rev-parse", "HEAD"], {
       cwd: worktreePath,
+      ...(signal !== undefined ? { signal } : {}),
     });
     return head.stdout.trim();
   }
@@ -165,6 +192,7 @@ export class GitOrchestrator {
     branch: string;
     remote?: string;
     token?: string;
+    signal?: AbortSignal;
   }): Promise<void> {
     const remote = params.remote ?? "origin";
     const token = params.token ?? this.config.GITHUB_TOKEN;
@@ -185,6 +213,7 @@ export class GitOrchestrator {
         cwd: params.worktreePath,
         env: this.gitEnv(token),
         timeoutMs: 120_000,
+        ...(params.signal !== undefined ? { signal: params.signal } : {}),
       },
     );
   }

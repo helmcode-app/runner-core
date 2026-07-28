@@ -104,17 +104,14 @@ Notes:
 
 Build cache lives in Docker’s own storage (`docker builder prune` if you want to reclaim space).
 
-## 4. CI snippet
+## 4. CI
 
-```yaml
-# GitHub Actions example
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker compose run --rm --build test
-```
+GitHub Actions workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+
+- **test** — `npm ci` + typecheck + `npm test` on Node 22  
+- **test-docker** — `docker compose run --rm --build test` (parity with local Docker-only path)
+
+Triggered on `push` / `pull_request` to `main` (and `master`), plus `workflow_dispatch`.
 
 ## Targets reference
 

@@ -44,8 +44,9 @@ docker compose run --rm --build test   # typecheck + full suite
 
 Full guide: [docs/testing-docker.md](./docs/testing-docker.md).
 
-Uses Node's built-in test runner via `tsx` (no extra test framework).
+CI: [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs typecheck + tests on every push/PR (`npm test` and Docker test target).
 
+Uses Node's built-in test runner via `tsx` (no extra test framework).
 ## Quick start
 
 ```bash

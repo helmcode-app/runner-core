@@ -7,7 +7,8 @@ const envSchema = z.object({
   HELM_MODE: helmModeSchema.default("open-core"),
   MAIN_REPO_PATH: z.string().min(1).default("/app/main_repo"),
   WORKSPACES_PATH: z.string().min(1).default("/app/workspaces"),
-  PORT: z.coerce.number().int().positive().default(8080),
+  /** 0 binds an ephemeral port (useful for tests). */
+  PORT: z.coerce.number().int().min(0).max(65535).default(8080),
   HOST: z.string().min(1).default("0.0.0.0"),
   GATEWAY_URL: z.string().url().optional(),
   GATEWAY_TOKEN: z.string().optional(),

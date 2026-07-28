@@ -24,6 +24,28 @@ entrypoint.ts
                                       └─ git worktree remove
 ```
 
+## Tests
+
+**Local (needs Node 20+):**
+
+```bash
+npm test                 # unit + integration
+npm run test:unit
+npm run test:integration
+```
+
+**Docker only (no host Node / npm install):**
+
+```bash
+docker compose run --rm --build test   # typecheck + full suite
+./scripts/docker-test.sh               # same via helper
+./scripts/docker-test.sh smoke         # open-core on :18080
+```
+
+Full guide: [docs/testing-docker.md](./docs/testing-docker.md).
+
+Uses Node's built-in test runner via `tsx` (no extra test framework).
+
 ## Quick start
 
 ```bash

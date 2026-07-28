@@ -1,4 +1,9 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config.js";
 import { AgentPipeline } from "../core/agent.js";
@@ -16,16 +21,27 @@ interface TaskRecord {
   promise: Promise<AgentResult>;
 }
 
+export interface OpenCoreServer {
+  server: Server;
+  host: string;
+  port: number;
+  baseUrl: string;
+  agent: AgentPipeline;
+  close(): Promise<void>;
+}
+
 /**
  * Standalone monolithic API for the iPad / local client (HELM_MODE=open-core).
- * Listens on PORT (default 8080). No commercial billing/routing.
+ * Listens on PORT (default 8080; 0 = ephemeral). No commercial billing/routing.
  */
 export async function startOpenCore(
   config: AppConfig,
   logger: Logger,
-): Promise<void> {
+  opts: { installSignalHandlers?: boolean } = {},
+): Promise<OpenCoreServer> {
   const log = logger.child({ component: "open-core" });
   const tasks = new Map<string, TaskRecord>();
+  const installSignals = opts.installSignalHandlers !== false;
 
   const agent = new AgentPipeline({
     config,
@@ -161,22 +177,44 @@ export async function startOpenCore(
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(config.PORT, config.HOST, () => {
-      log.info("open-core listening", {
-        host: config.HOST,
-        port: config.PORT,
-      });
-      resolve();
-    });
+    server.listen(config.PORT, config.HOST, () => resolve());
   });
 
-  const shutdown = (): void => {
-    log.info("open-core shutting down");
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 10_000).unref();
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("failed to bind open-core HTTP server");
+  }
+
+  const host = config.HOST === "0.0.0.0" ? "127.0.0.1" : config.HOST;
+  const port = address.port;
+  log.info("open-core listening", { host: config.HOST, port });
+
+  const close = async (): Promise<void> =>
+    new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+
+  if (installSignals) {
+    const shutdown = (): void => {
+      log.info("open-core shutting down");
+      void close().then(
+        () => process.exit(0),
+        () => process.exit(1),
+      );
+      setTimeout(() => process.exit(1), 10_000).unref();
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+  }
+
+  return {
+    server,
+    host,
+    port,
+    baseUrl: `http://${host}:${port}`,
+    agent,
+    close,
   };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

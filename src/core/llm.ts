@@ -56,7 +56,7 @@ export class LlmClient {
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: user },
     ]);
-    return this.parsePatchResponse(raw);
+    return parseLlmPatchResponse(raw);
   }
 
   private buildUserPrompt(input: GeneratePatchesInput): string {
@@ -152,42 +152,44 @@ export class LlmClient {
     }
   }
 
-  private parsePatchResponse(raw: string): LlmPatchResponse {
-    const jsonText = extractJsonObject(raw);
-    let data: unknown;
-    try {
-      data = JSON.parse(jsonText);
-    } catch (err) {
-      throw new Error(
-        `Failed to parse LLM JSON: ${(err as Error).message}\n${truncate(raw, 800)}`,
-      );
-    }
+}
 
-    if (!data || typeof data !== "object") {
-      throw new Error("LLM JSON root must be an object");
-    }
-
-    const obj = data as Record<string, unknown>;
-    const summary =
-      typeof obj.summary === "string" ? obj.summary : "agent patch";
-    const giveUp = obj.giveUp === true;
-    const reason = typeof obj.reason === "string" ? obj.reason : undefined;
-    const patchesRaw = Array.isArray(obj.patches) ? obj.patches : [];
-
-    const patches: FilePatch[] = [];
-    for (const item of patchesRaw) {
-      if (!item || typeof item !== "object") continue;
-      const p = item as Record<string, unknown>;
-      if (typeof p.path !== "string" || typeof p.content !== "string") continue;
-      patches.push({
-        path: p.path,
-        content: p.content,
-        ensureDir: true,
-      });
-    }
-
-    return { summary, patches, giveUp, ...(reason !== undefined ? { reason } : {}) };
+/** Parse an LLM completion string into a structured patch response. */
+export function parseLlmPatchResponse(raw: string): LlmPatchResponse {
+  const jsonText = extractJsonObject(raw);
+  let data: unknown;
+  try {
+    data = JSON.parse(jsonText);
+  } catch (err) {
+    throw new Error(
+      `Failed to parse LLM JSON: ${(err as Error).message}\n${truncate(raw, 800)}`,
+    );
   }
+
+  if (!data || typeof data !== "object") {
+    throw new Error("LLM JSON root must be an object");
+  }
+
+  const obj = data as Record<string, unknown>;
+  const summary =
+    typeof obj.summary === "string" ? obj.summary : "agent patch";
+  const giveUp = obj.giveUp === true;
+  const reason = typeof obj.reason === "string" ? obj.reason : undefined;
+  const patchesRaw = Array.isArray(obj.patches) ? obj.patches : [];
+
+  const patches: FilePatch[] = [];
+  for (const item of patchesRaw) {
+    if (!item || typeof item !== "object") continue;
+    const p = item as Record<string, unknown>;
+    if (typeof p.path !== "string" || typeof p.content !== "string") continue;
+    patches.push({
+      path: p.path,
+      content: p.content,
+      ensureDir: true,
+    });
+  }
+
+  return { summary, patches, giveUp, ...(reason !== undefined ? { reason } : {}) };
 }
 
 function truncate(s: string, max: number): string {
@@ -195,7 +197,7 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max) + `\n…[truncated ${s.length - max} chars]`;
 }
 
-function extractJsonObject(raw: string): string {
+export function extractJsonObject(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.startsWith("{")) return trimmed;
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);

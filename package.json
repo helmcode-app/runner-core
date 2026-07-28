@@ -25,7 +25,10 @@
     "dev": "tsx watch src/entrypoint.ts",
     "start": "node dist/entrypoint.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test test/**/*.test.ts",
+    "test:unit": "tsx --test test/unit/**/*.test.ts",
+    "test:integration": "tsx --test test/integration/**/*.test.ts"
   },
   "dependencies": {
     "zod": "^3.24.2"

@@ -22,9 +22,11 @@ async function main(): Promise<void> {
   });
 
   switch (config.mode) {
-    case "open-core":
+    case "open-core": {
+      // Keep process alive via the listening server handle.
       await startOpenCore(config, logger);
       break;
+    }
     case "commercial-saas":
       await startCommercialSaas(config, logger);
       break;

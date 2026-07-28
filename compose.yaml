@@ -1,0 +1,67 @@
+# Docker-only workflows — host only needs Docker (no local Node/npm install).
+#
+#   docker compose run --rm test          # typecheck + unit + integration
+#   docker compose run --rm test-unit
+#   docker compose up smoke               # open-core on localhost:18080
+
+services:
+  test:
+    build:
+      context: .
+      target: test
+    environment:
+      NODE_ENV: test
+    # Ephemeral container; no bind mounts → host FS stays clean.
+    command: ["sh", "-c", "npm run typecheck && npm test"]
+
+  test-unit:
+    build:
+      context: .
+      target: test
+    environment:
+      NODE_ENV: test
+    command: ["npm", "run", "test:unit"]
+
+  test-integration:
+    build:
+      context: .
+      target: test
+    environment:
+      NODE_ENV: test
+    command: ["npm", "run", "test:integration"]
+
+  smoke:
+    build:
+      context: .
+      target: smoke
+    ports:
+      - "18080:8080"
+    environment:
+      HELM_MODE: open-core
+      HOST: 0.0.0.0
+      PORT: "8080"
+      LOG_LEVEL: info
+      # No real LLM required; empty patches + testCommand=true still exercise the API.
+      GITHUB_TOKEN: smoke-local-token
+    # Only fixture paths — never mount over /app (would hide dist/node_modules).
+    volumes:
+      - smoke-main:/app/main_repo
+      - smoke-ws:/app/workspaces
+      - smoke-bare:/app/remote.git
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  smoke-main:
+  smoke-ws:
+  smoke-bare:

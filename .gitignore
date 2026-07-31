@@ -145,3 +145,12 @@ vite.config.ts.timestamp-*
 # IDE
 .idea/
 .vscode/
+
+# Go
+services/vfs/bin/
+**/bin/helm-vfs
+*.exe
+*.test
+*.out
+vendor/
+

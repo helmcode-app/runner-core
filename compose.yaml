@@ -1,8 +1,11 @@
-# Docker-only workflows — host only needs Docker (no local Node/npm install).
+# Docker-only workflows — host only needs Docker.
 #
-#   docker compose run --rm test          # typecheck + unit + integration
-#   docker compose run --rm test-unit
-#   docker compose up smoke               # open-core on localhost:18080
+#   docker compose run --rm test
+#   docker compose up smoke
+#
+# Host repo for iPad / VFS (see compose.dev.yaml):
+#   export HOST_REPO=/absolute/path/to/git/repo
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 
 services:
   test:
@@ -11,8 +14,12 @@ services:
       target: test
     environment:
       NODE_ENV: test
-    # Ephemeral container; no bind mounts → host FS stays clean.
-    command: ["sh", "-c", "npm run typecheck && npm test"]
+    command:
+      [
+        "sh",
+        "-c",
+        "npm run typecheck -w @helmcode/runner && npm test -w @helmcode/runner",
+      ]
 
   test-unit:
     build:
@@ -20,7 +27,7 @@ services:
       target: test
     environment:
       NODE_ENV: test
-    command: ["npm", "run", "test:unit"]
+    command: ["npm", "run", "test:unit", "-w", "@helmcode/runner"]
 
   test-integration:
     build:
@@ -28,7 +35,7 @@ services:
       target: test
     environment:
       NODE_ENV: test
-    command: ["npm", "run", "test:integration"]
+    command: ["npm", "run", "test:integration", "-w", "@helmcode/runner"]
 
   smoke:
     build:
@@ -41,9 +48,8 @@ services:
       HOST: 0.0.0.0
       PORT: "8080"
       LOG_LEVEL: info
-      # No real LLM required; empty patches + testCommand=true still exercise the API.
       GITHUB_TOKEN: smoke-local-token
-    # Only fixture paths — never mount over /app (would hide dist/node_modules).
+      VFS_ENABLED: "true"
     volumes:
       - smoke-main:/app/main_repo
       - smoke-ws:/app/workspaces

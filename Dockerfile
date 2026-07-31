@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7
 #
-# Targets:
-#   test     — run unit + integration suite (no host Node required)
-#   build    — compile TypeScript
-#   runtime  — production open-core / commercial-saas image
-#   smoke    — runtime + auto-seeded local git fixture for API smoke
+# Monorepo layout:
+#   services/runner  — Node.js agent orchestrator
+#   services/vfs     — Go helm-vfs binary
+#
+# Targets: test | build | runtime | smoke
 
 FROM node:22-bookworm-slim AS base
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && git config --system user.name "HelmCode Agent"
 
 # ---------------------------------------------------------------------------
-# test — full source + devDependencies; isolated from host node_modules
+# test — Node suite (+ optional helm-vfs binary for VFS bridge tests)
 # ---------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS test
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -36,53 +36,83 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       git \
+      golang-go \
     && rm -rf /var/lib/apt/lists/* \
     && git config --system --add safe.directory '*' \
     && git config --system user.email "test@helmcode.app" \
     && git config --system user.name "HelmCode Test"
-WORKDIR /app
-COPY package.json package-lock.json ./
+WORKDIR /src
+COPY package.json package-lock.json* ./
+COPY services/runner/package.json services/runner/package.json
 RUN npm ci
-COPY tsconfig.json ./
-COPY src ./src
-COPY test ./test
-# Default: typecheck + full suite. Override with `docker run ... npm run test:unit`.
-CMD ["sh", "-c", "npm run typecheck && npm test"]
+COPY services/runner services/runner
+COPY services/vfs services/vfs
+WORKDIR /src/services/vfs
+RUN go build -o bin/helm-vfs ./cmd/helm-vfs
+WORKDIR /src
+ENV HELM_VFS_BIN=/src/services/vfs/bin/helm-vfs
+CMD ["sh", "-c", "npm run typecheck -w @helmcode/runner && npm test -w @helmcode/runner"]
 
 # ---------------------------------------------------------------------------
-# deps / build / runtime
+# deps / build (runner)
 # ---------------------------------------------------------------------------
+# base sets NODE_ENV=production (runtime default). For compile we need
+# devDependencies (typescript → tsc). Install with development, then prune.
 FROM base AS deps
-WORKDIR /app
+WORKDIR /src
+ENV NODE_ENV=development
 COPY package.json package-lock.json* ./
-RUN npm install --omit=dev=false
+COPY services/runner/package.json services/runner/package.json
+RUN npm ci
 
 FROM deps AS build
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
+COPY services/runner/tsconfig.json services/runner/tsconfig.json
+COPY services/runner/src services/runner/src
+# Ensure workspace node_modules path exists for runtime COPY (npm often hoists to /src/node_modules).
+RUN npm run build -w @helmcode/runner \
+    && npm prune --omit=dev -w @helmcode/runner \
+    && mkdir -p /src/services/runner/node_modules
 
+# ---------------------------------------------------------------------------
+# go-build (helm-vfs)
+# ---------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS go-build
+WORKDIR /src
+COPY services/vfs/go.mod services/vfs/go.sum ./
+RUN go mod download
+COPY services/vfs/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/helm-vfs ./cmd/helm-vfs
+
+# ---------------------------------------------------------------------------
+# runtime
+# ---------------------------------------------------------------------------
 FROM base AS runtime
 WORKDIR /app
-RUN mkdir -p /app/main_repo /app/workspaces /app/remote.git \
+ENV HELM_VFS_BIN=/app/bin/helm-vfs \
+    VFS_ENABLED=true
+RUN mkdir -p /app/main_repo /app/workspaces /app/remote.git /app/bin \
     && useradd --system --uid 10001 --home /app --shell /usr/sbin/nologin helm \
     && chown -R helm:helm /app
-COPY --from=build --chown=helm:helm /app/package.json /app/package.json
-COPY --from=build --chown=helm:helm /app/node_modules /app/node_modules
-COPY --from=build --chown=helm:helm /app/dist /app/dist
+COPY --from=build --chown=helm:helm /src/services/runner/package.json /app/package.json
+COPY --from=build --chown=helm:helm /src/node_modules /app/node_modules
+COPY --from=build --chown=helm:helm /src/services/runner/dist /app/dist
+# workspace install may nest runner deps — also copy package node_modules if present
+COPY --from=build --chown=helm:helm /src/services/runner/node_modules /app/node_modules_runner
+RUN if [ -d /app/node_modules_runner ] && [ "$(ls -A /app/node_modules_runner 2>/dev/null)" ]; then \
+      cp -a /app/node_modules_runner/. /app/node_modules/ 2>/dev/null || true; \
+    fi \
+    && rm -rf /app/node_modules_runner
+COPY --from=go-build --chown=helm:helm /out/helm-vfs /app/bin/helm-vfs
 USER helm
 EXPOSE 8080
-# open-core serves /health; commercial-saas is outbound-only (process liveness).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "const m=process.env.HELM_MODE||'open-core'; if(m!=='open-core') process.exit(0); fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["node", "dist/entrypoint.js"]
 
 # ---------------------------------------------------------------------------
-# smoke — API smoke with an in-container git fixture (no host repo mount)
+# smoke
 # ---------------------------------------------------------------------------
 FROM runtime AS smoke
-# Stay root for entrypoint: volume mounts need chown + content wipe (not rmdir).
-# Script drops privileges to `helm` before starting Node.
 USER root
 COPY scripts/docker-smoke-init.sh /app/docker-smoke-init.sh
 RUN chmod +x /app/docker-smoke-init.sh

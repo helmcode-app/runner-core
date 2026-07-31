@@ -4,7 +4,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config.js";
 import { AgentPipeline } from "../core/agent.js";
 import type { Logger } from "../logger.js";
@@ -15,6 +15,12 @@ import type {
   TaskProgressEvent,
   TaskStatus,
 } from "../types.js";
+import { authorize } from "../util/auth.js";
+import {
+  createVfsGateway,
+  handleVfsHttp,
+  type VfsGateway,
+} from "../vfs/index.js";
 
 interface TaskRecord {
   result?: AgentResult;
@@ -30,6 +36,7 @@ export interface OpenCoreServer {
   port: number;
   baseUrl: string;
   agent: AgentPipeline;
+  vfs: VfsGateway;
   close(): Promise<void>;
 }
 
@@ -74,6 +81,11 @@ export async function startOpenCore(
       }
     },
   });
+
+  // Mutable ref so HTTP routes can use the bridge after createVfsGateway.
+  const vfsHolder: { current: VfsGateway } = {
+    current: { bridge: null, close: async () => undefined },
+  };
 
   const server = createServer(async (req, res) => {
     try {
@@ -225,8 +237,22 @@ export async function startOpenCore(
       return;
     }
 
+    if (
+      await handleVfsHttp(req, res, method, url.pathname, {
+        config,
+        bridge: vfsHolder.current.bridge,
+        sendJson,
+        readJson,
+      })
+    ) {
+      return;
+    }
+
     sendJson(res, 404, { error: "not found" });
   }
+
+  // Create HTTP server object first, then attach VFS (upgrade + child process).
+  vfsHolder.current = await createVfsGateway(server, config, logger);
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -240,12 +266,18 @@ export async function startOpenCore(
 
   const host = config.HOST === "0.0.0.0" ? "127.0.0.1" : config.HOST;
   const port = address.port;
-  log.info("open-core listening", { host: config.HOST, port });
+  log.info("open-core listening", {
+    host: config.HOST,
+    port,
+    vfs: Boolean(vfsHolder.current.bridge),
+  });
 
-  const close = async (): Promise<void> =>
-    new Promise((resolve, reject) => {
+  const close = async (): Promise<void> => {
+    await vfsHolder.current.close();
+    await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
+  };
 
   if (installSignals) {
     const shutdown = (): void => {
@@ -266,6 +298,7 @@ export async function startOpenCore(
     port,
     baseUrl: `http://${host}:${port}`,
     agent,
+    vfs: vfsHolder.current,
     close,
   };
 }
@@ -282,27 +315,7 @@ function submitToTask(id: string, body: OpenCoreSubmitBody) {
   };
 }
 
-/**
- * When expectedToken is undefined, allow all requests (dev).
- * Otherwise require Authorization: Bearer <token> with constant-time compare.
- */
-export function authorize(
-  req: IncomingMessage,
-  expectedToken: string | undefined,
-): boolean {
-  if (!expectedToken) return true;
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith("Bearer ")) return false;
-  const got = header.slice("Bearer ".length).trim();
-  const a = Buffer.from(got);
-  const b = Buffer.from(expectedToken);
-  if (a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
-}
+export { authorize } from "../util/auth.js";
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);

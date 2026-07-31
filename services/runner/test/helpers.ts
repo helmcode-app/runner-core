@@ -35,6 +35,8 @@ export function testConfig(overrides: Record<string, string> = {}): AppConfig {
     GIT_USER_EMAIL: "test@helmcode.app",
     // Disable default budget in tests unless overridden.
     TASK_TIMEOUT_MS: "0",
+    // Agent HTTP tests do not require helm-vfs unless a suite opts in.
+    VFS_ENABLED: "false",
     ...overrides,
   });
 }

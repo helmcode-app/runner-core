@@ -1,0 +1,11 @@
+{
+  "name": "@helmcode/vfs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HelmCode helm-vfs — Go virtual filesystem JSON-RPC process.",
+  "scripts": {
+    "build": "go build -o bin/helm-vfs ./cmd/helm-vfs",
+    "test": "go test ./...",
+    "clean": "rm -rf bin"
+  }
+}

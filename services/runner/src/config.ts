@@ -34,6 +34,13 @@ const envSchema = z.object({
    * When unset, auth is disabled (local/dev only — log a warning at boot).
    */
   OPENCORE_API_TOKEN: z.string().optional(),
+  /** Absolute path to the helm-vfs binary (default: auto-resolve). */
+  HELM_VFS_BIN: z.string().optional(),
+  /** When true (default), open-core starts helm-vfs for WebSocket VFS gateway. */
+  VFS_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .default("true")
+    .transform((v) => v === "true" || v === "1"),
   LOG_LEVEL: z
     .enum(["debug", "info", "warn", "error"])
     .default("info"),
@@ -48,8 +55,19 @@ function loadVersion(): string {
   return process.env.npm_package_version ?? "0.1.0";
 }
 
+/** Compose often injects `KEY=` (empty string). Zod defaults only apply when the key is absent. */
+function envWithEmptyAsUnset(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
+  for (const [key, value] of Object.entries(out)) {
+    if (value === "") {
+      delete out[key];
+    }
+  }
+  return out;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const parsed = envSchema.safeParse(env);
+  const parsed = envSchema.safeParse(envWithEmptyAsUnset(env));
   if (!parsed.success) {
     const details = parsed.error.issues
       .map((i) => `${i.path.join(".")}: ${i.message}`)

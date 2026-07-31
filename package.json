@@ -1,41 +1,27 @@
 {
-  "name": "@helmcode/runner-core",
+  "name": "helmcode-runner-core",
   "version": "0.1.0",
-  "description": "Headless AI agent orchestration engine for HelmCode — Git worktree isolation, self-healing tests, dual-mode (open-core / commercial-saas).",
-  "license": "MIT",
   "private": true,
-  "type": "module",
+  "description": "HelmCode runner-core monorepo — Node agent orchestrator + Go VFS.",
+  "license": "MIT",
+  "workspaces": [
+    "services/runner"
+  ],
+  "scripts": {
+    "build": "npm run build -w @helmcode/runner",
+    "build:runner": "npm run build -w @helmcode/runner",
+    "build:vfs": "cd services/vfs && go build -o bin/helm-vfs ./cmd/helm-vfs",
+    "dev": "npm run dev -w @helmcode/runner",
+    "start": "npm run start -w @helmcode/runner",
+    "typecheck": "npm run typecheck -w @helmcode/runner",
+    "test": "npm run test -w @helmcode/runner",
+    "test:unit": "npm run test:unit -w @helmcode/runner",
+    "test:integration": "npm run test:integration -w @helmcode/runner",
+    "test:go": "cd services/vfs && go test ./...",
+    "test:all": "npm run test:go && npm test",
+    "lint": "npm run typecheck"
+  },
   "engines": {
     "node": ">=20.11.0"
-  },
-  "main": "./dist/entrypoint.js",
-  "types": "./dist/entrypoint.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/entrypoint.d.ts",
-      "import": "./dist/entrypoint.js"
-    }
-  },
-  "bin": {
-    "helm-runner": "./dist/entrypoint.js"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "clean": "rm -rf dist",
-    "dev": "tsx watch src/entrypoint.ts",
-    "start": "node dist/entrypoint.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test test/**/*.test.ts",
-    "test:unit": "tsx --test test/unit/**/*.test.ts",
-    "test:integration": "tsx --test test/integration/**/*.test.ts"
-  },
-  "dependencies": {
-    "zod": "^3.24.2"
-  },
-  "devDependencies": {
-    "@types/node": "^22.13.10",
-    "tsx": "^4.19.3",
-    "typescript": "^5.8.2"
   }
 }

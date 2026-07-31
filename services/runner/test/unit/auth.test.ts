@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { describe, it } from "node:test";
-import { authorize } from "../../src/modes/open-core.js";
+import { authorize } from "../../src/util/auth.js";
 
 function req(authorization?: string): IncomingMessage {
   return { headers: authorization ? { authorization } : {} } as IncomingMessage;

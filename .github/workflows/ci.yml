@@ -15,8 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: typecheck + test
+  test-runner:
+    name: runner (typecheck + test)
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -29,15 +29,50 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: services/vfs/go.sum
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Build helm-vfs (for VFS bridge tests)
+        run: npm run build:vfs
 
       - name: Typecheck
         run: npm run typecheck
 
       - name: Unit + integration tests
         run: npm test
+        env:
+          HELM_VFS_BIN: ${{ github.workspace }}/services/vfs/bin/helm-vfs
+
+  test-vfs:
+    name: vfs (go test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/vfs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: services/vfs/go.sum
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build helm-vfs
+        run: go build -o bin/helm-vfs ./cmd/helm-vfs
 
   test-docker:
     name: docker test target

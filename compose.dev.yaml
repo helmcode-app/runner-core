@@ -1,0 +1,73 @@
+# Local dev: open-core + VFS against a **host** git checkout.
+#
+# Usage:
+#   1. Set the host repo path (either export or edit the default below):
+#        export HOST_REPO=/absolute/path/to/your/git/repo
+#   2. Start:
+#        docker compose -f compose.yaml -f compose.dev.yaml up --build dev
+#   3. Probe:
+#        curl -s http://127.0.0.1:18080/health | jq .
+#        curl -s http://127.0.0.1:18080/v1/vfs/status | jq .
+#   4. iPad / Simulator Base URL:
+#        http://127.0.0.1:18080          (Simulator)
+#        http://<Mac-LAN-IP>:18080       (physical iPad)
+#
+# Notes:
+#   - HOST_REPO must be a git repo (contains .git). If empty, smoke-init seeds a fixture.
+#   - One runner instance = one repo (MAIN_REPO_PATH=/app/main_repo).
+#   - Agent worktrees use a separate volume (/app/workspaces), not the host mount.
+#   - Optional: OPENCORE_API_TOKEN, LLM_*, GITHUB_TOKEN via env or a root .env file.
+#   - Stop: docker compose -f compose.yaml -f compose.dev.yaml down
+
+services:
+  dev:
+    build:
+      context: .
+      target: smoke
+    ports:
+      - "${DEV_PORT:-18080}:8080"
+    environment:
+      HELM_MODE: open-core
+      HOST: 0.0.0.0
+      PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      VFS_ENABLED: "true"
+      MAIN_REPO_PATH: /app/main_repo
+      WORKSPACES_PATH: /app/workspaces
+      # Optional IDE label (else derived from git origin, else basename main_repo):
+      # VFS_PROJECT_NAME: my-app
+      VFS_PROJECT_NAME: ${VFS_PROJECT_NAME:-}
+      # Leave empty for unauthenticated local testing (match iPad Settings token if set).
+      OPENCORE_API_TOKEN: ${OPENCORE_API_TOKEN:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-local-dev-token}
+      # LLM_* must be valid strings (empty "" fails Zod — defaults only apply when unset).
+      # Without LLM_API_KEY the agent applies no patches; VFS / health still work.
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+      GIT_USER_NAME: ${GIT_USER_NAME:-HelmCode Agent}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-agent@helmcode.app}
+      DEFAULT_BASE_BRANCH: ${DEFAULT_BASE_BRANCH:-main}
+    volumes:
+      # ------------------------------------------------------------------
+      # Repo entrypoint: host path → container MAIN_REPO_PATH
+      # Edit HOST_REPO (export or .env), or replace the left-hand path below.
+      # ------------------------------------------------------------------
+      - ${HOST_REPO:-/absolute/path/to/your/git/repo}:/app/main_repo
+      # Agent worktrees (do not bind-mount over the host repo)
+      - dev-workspaces:/app/workspaces
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  dev-workspaces:

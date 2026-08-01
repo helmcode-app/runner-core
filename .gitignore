@@ -154,3 +154,6 @@ services/vfs/bin/
 *.out
 vendor/
 
+
+# Local iPad client symlink (do not commit)
+HelmCode

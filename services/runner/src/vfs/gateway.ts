@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import { authorize } from "../util/auth.js";
+import { authorize } from "../http/index.js";
 import { VfsBridge } from "./bridge.js";
 import { JsonRpcCode, VfsMethod } from "./protocol.js";
 

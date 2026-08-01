@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { AgentPipeline } from "../../src/core/agent.js";
+import { AgentPipeline } from "../../src/agent/index.js";
 import { runCommandOrThrow } from "../../src/util/process.js";
 import {
   createLocalGitFixture,

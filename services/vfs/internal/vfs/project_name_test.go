@@ -2,17 +2,30 @@ package vfs
 
 import "testing"
 
-func TestRepoNameFromRemoteURL(t *testing.T) {
+func TestFormatRemoteForDisplay(t *testing.T) {
 	cases := map[string]string{
-		"https://github.com/helmcode-app/HelmCode.git": "HelmCode",
-		"https://github.com/helmcode-app/HelmCode":     "HelmCode",
-		"git@github.com:helmcode-app/runner-core.git":  "runner-core",
-		"ssh://git@github.com/org/my-repo.git":         "my-repo",
-		"https://gitlab.com/g/a/b/proj.git/":           "proj",
+		"https://github.com/org/repo.git":     "github.com/org/repo",
+		"https://github.com/org/repo":         "github.com/org/repo",
+		"git@github.com:org/repo.git":         "github.com/org/repo",
+		"ssh://git@github.com/org/repo.git":   "github.com/org/repo",
+		"https://gitlab.com/g/sub/repo.git":   "gitlab.com/g/sub/repo",
 	}
 	for in, want := range cases {
-		if got := repoNameFromRemoteURL(in); got != want {
-			t.Fatalf("repoNameFromRemoteURL(%q) = %q, want %q", in, got, want)
+		if got := formatRemoteForDisplay(in); got != want {
+			t.Fatalf("formatRemoteForDisplay(%q)=%q want %q", in, got, want)
 		}
+	}
+}
+
+func TestRepoNameFromRemoteURL(t *testing.T) {
+	if got := repoNameFromRemoteURL("git@github.com:org/HelmCode.git"); got != "HelmCode" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestResolveGitBranch(t *testing.T) {
+	// Non-repo path → empty (no panic, no invented "main").
+	if got := ResolveGitBranch(t.TempDir()); got != "" {
+		t.Fatalf("non-repo branch=%q want empty", got)
 	}
 }

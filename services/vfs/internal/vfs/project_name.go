@@ -32,18 +32,57 @@ func ResolveProjectName(root string) string {
 	return base
 }
 
-func gitOriginRepoName(root string) string {
+// ResolveGitRemote returns a display remote for clients (e.g. github.com/org/repo).
+// Empty when origin is missing — clients should not fall back to container paths
+// like /app/main_repo for UI subtitles.
+func ResolveGitRemote(root string) string {
+	raw := gitOriginURL(root)
+	if raw == "" {
+		return ""
+	}
+	return formatRemoteForDisplay(raw)
+}
+
+// ResolveGitBranch returns the current branch name of the workspace repo.
+// Empty when not a git repo, git missing, or detached HEAD (HEAD is a commit).
+func ResolveGitBranch(root string) string {
+	// Prefer symbolic-ref so detached HEAD yields empty (not a short sha).
+	cmd := exec.Command("git", "-C", root, "symbolic-ref", "--short", "HEAD")
+	out, err := cmd.Output()
+	if err == nil {
+		if b := strings.TrimSpace(string(out)); b != "" {
+			return b
+		}
+	}
+	// Fallback: rev-parse --abbrev-ref HEAD (returns "HEAD" when detached).
+	cmd = exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err = cmd.Output()
+	if err != nil {
+		return ""
+	}
+	b := strings.TrimSpace(string(out))
+	if b == "" || b == "HEAD" {
+		return ""
+	}
+	return b
+}
+
+func gitOriginURL(root string) string {
 	cmd := exec.Command("git", "-C", root, "remote", "get-url", "origin")
 	out, err := cmd.Output()
 	if err != nil {
 		// No origin, not a git repo, or git missing — fall through.
 		return ""
 	}
-	return repoNameFromRemoteURL(strings.TrimSpace(string(out)))
+	return strings.TrimSpace(string(out))
 }
 
-// repoNameFromRemoteURL extracts the repository name from common git remote forms.
-func repoNameFromRemoteURL(raw string) string {
+func gitOriginRepoName(root string) string {
+	return repoNameFromRemoteURL(gitOriginURL(root))
+}
+
+// formatRemoteForDisplay normalizes origin URLs to host/org/repo (no scheme, no .git).
+func formatRemoteForDisplay(raw string) string {
 	if raw == "" {
 		return ""
 	}
@@ -51,19 +90,49 @@ func repoNameFromRemoteURL(raw string) string {
 	u = strings.TrimSuffix(u, "/")
 	u = strings.TrimSuffix(u, ".git")
 
-	// scp-like: git@host:org/repo
-	if strings.Contains(u, ":") && !strings.Contains(u, "://") {
-		if i := strings.LastIndex(u, ":"); i >= 0 && i+1 < len(u) {
-			u = u[i+1:]
+	// https://host/org/repo or ssh://git@host/org/repo
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+		// drop userinfo git@
+		if at := strings.Index(u, "@"); at >= 0 {
+			u = u[at+1:]
 		}
+		return u
 	}
 
-	// URL path or remaining org/repo
-	if i := strings.LastIndex(u, "/"); i >= 0 && i+1 < len(u) {
-		return u[i+1:]
+	// scp-like: git@host:org/repo
+	if strings.Contains(u, ":") && !strings.Contains(u, "://") {
+		// strip optional user@
+		hostPath := u
+		if at := strings.LastIndex(u, "@"); at >= 0 {
+			hostPath = u[at+1:]
+		}
+		if i := strings.Index(hostPath, ":"); i >= 0 && i+1 < len(hostPath) {
+			return hostPath[:i] + "/" + hostPath[i+1:]
+		}
+		return hostPath
 	}
-	if u != "" {
-		return u
+
+	return u
+}
+
+// repoNameFromRemoteURL extracts the repository name from common git remote forms.
+func repoNameFromRemoteURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	// Reuse display form so path segment is stable across URL styles.
+	display := formatRemoteForDisplay(raw)
+	if display == "" {
+		display = strings.TrimSpace(raw)
+		display = strings.TrimSuffix(display, "/")
+		display = strings.TrimSuffix(display, ".git")
+	}
+	if i := strings.LastIndex(display, "/"); i >= 0 && i+1 < len(display) {
+		return display[i+1:]
+	}
+	if display != "" {
+		return display
 	}
 	return ""
 }

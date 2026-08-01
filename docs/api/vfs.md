@@ -63,6 +63,8 @@ index.ts          # public exports
 {
   "root": "/app/main_repo",
   "name": "my-repo",
+  "remote": "github.com/org/my-repo",
+  "branch": "feature/vfs",
   "entries": [
     { "path": "pkg", "size": 0, "type": "dir" },
     { "path": "pkg/a.go", "size": 12, "type": "file" }
@@ -72,8 +74,10 @@ index.ts          # public exports
 
 | Field | Description |
 |-------|-------------|
-| `root` | Absolute workspace path |
+| `root` | Absolute workspace path (internal; Docker may use `/app/main_repo`) |
 | `name` | Client label: `VFS_PROJECT_NAME` / `PROJECT_NAME` → git origin repo name → basename |
+| `remote` | Git `origin` display form (`github.com/org/repo`); empty if no origin — clients must not use `root` as UI remote |
+| `branch` | Current HEAD branch (`git symbolic-ref --short HEAD`); empty if detached / not a git repo — clients must not invent `main` |
 | `entries` | Flattened tree via `filepath.WalkDir`; skips `.git`, `node_modules` |
 
 ### `vfs/read`

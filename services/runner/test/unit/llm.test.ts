@@ -4,7 +4,7 @@ import {
   extractJsonObject,
   LlmClient,
   parseLlmPatchResponse,
-} from "../../src/core/llm.js";
+} from "../../src/agent/llm.js";
 import { testConfig, testLogger } from "../helpers.js";
 
 describe("extractJsonObject", () => {

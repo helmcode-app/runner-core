@@ -7,7 +7,7 @@ import {
   detectTestCommand,
   formatTestFailureLog,
   runTests,
-} from "../../src/core/test-runner.js";
+} from "../../src/agent/test-runner.js";
 import { testLogger } from "../helpers.js";
 
 describe("detectTestCommand", () => {

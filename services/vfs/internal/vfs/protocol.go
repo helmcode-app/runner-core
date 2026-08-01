@@ -40,8 +40,15 @@ type TreeEntry struct {
 
 // InitializeResult is returned by vfs/initialize.
 type InitializeResult struct {
-	Root    string      `json:"root"`
-	Name    string      `json:"name"`
+	Root string `json:"root"`
+	// Name is the client project label (env / git repo name / basename).
+	Name string `json:"name"`
+	// Remote is the git origin in display form (e.g. github.com/org/repo).
+	// Empty when origin is unavailable — do not substitute container path.
+	Remote string `json:"remote,omitempty"`
+	// Branch is the current HEAD branch (git symbolic-ref / rev-parse).
+	// Empty when detached HEAD or not a git repo — clients must not invent "main".
+	Branch  string      `json:"branch,omitempty"`
 	Entries []TreeEntry `json:"entries"`
 }
 

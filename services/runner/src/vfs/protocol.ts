@@ -27,6 +27,16 @@ export interface VfsInitializeResult {
   root: string;
   /** Human-facing project label (git remote / env / basename). */
   name: string;
+  /**
+   * Git origin in display form (e.g. github.com/org/repo).
+   * Empty when unavailable — clients must not use `root` (e.g. /app/main_repo) as UI remote.
+   */
+  remote?: string;
+  /**
+   * Current HEAD branch name. Empty when detached HEAD or not a git repo —
+   * clients must not invent "main".
+   */
+  branch?: string;
   entries: VfsTreeEntry[];
 }
 

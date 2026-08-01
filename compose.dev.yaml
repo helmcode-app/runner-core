@@ -1,8 +1,9 @@
 # Local dev: open-core + VFS against a **host** git checkout.
 #
 # Usage:
-#   1. Set the host repo path (either export or edit the default below):
-#        export HOST_REPO=/absolute/path/to/your/git/repo
+#   1. REQUIRED — set a real host git checkout (absolute path):
+#        export HOST_REPO=/Users/you/Developer/src/github.com/org/my-repo
+#      or put HOST_REPO=... in runner-core/.env
 #   2. Start:
 #        docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 #   3. Probe:
@@ -13,7 +14,8 @@
 #        http://<Mac-LAN-IP>:18080       (physical iPad)
 #
 # Notes:
-#   - HOST_REPO must be a git repo (contains .git). If empty, smoke-init seeds a fixture.
+#   - HOST_REPO is required. The placeholder path is not valid and will fail mount.
+#   - HOST_REPO must be a git repo (contains .git).
 #   - One runner instance = one repo (MAIN_REPO_PATH=/app/main_repo).
 #   - Agent worktrees use a separate volume (/app/workspaces), not the host mount.
 #   - Optional: OPENCORE_API_TOKEN, LLM_*, GITHUB_TOKEN via env or a root .env file.
@@ -51,9 +53,9 @@ services:
     volumes:
       # ------------------------------------------------------------------
       # Repo entrypoint: host path → container MAIN_REPO_PATH
-      # Edit HOST_REPO (export or .env), or replace the left-hand path below.
+      # Must be a real absolute path (export HOST_REPO or runner-core/.env).
       # ------------------------------------------------------------------
-      - ${HOST_REPO:-/absolute/path/to/your/git/repo}:/app/main_repo
+      - ${HOST_REPO:?Set HOST_REPO to an absolute path of a local git repo}:/app/main_repo
       # Agent worktrees (do not bind-mount over the host repo)
       - dev-workspaces:/app/workspaces
     healthcheck:

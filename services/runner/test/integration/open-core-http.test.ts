@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import type { AgentResult } from "../../src/types.js";
-import { startOpenCore, type OpenCoreServer } from "../../src/modes/open-core.js";
+import { startOpenCore, type OpenCoreServer } from "../../src/modes/open-core/index.js";
 import {
   createLocalGitFixture,
   makeTempDir,

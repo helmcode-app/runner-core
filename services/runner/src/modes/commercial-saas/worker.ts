@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { AppConfig } from "../config.js";
-import { AgentPipeline } from "../core/agent.js";
-import type { Logger } from "../logger.js";
+import type { AppConfig } from "../../config.js";
+import { AgentPipeline } from "../../agent/index.js";
+import type { Logger } from "../../logger.js";
 import type {
   AgentTask,
   JsonRpcRequest,
   JsonRpcResponse,
   TaskProgressEvent,
-} from "../types.js";
+} from "../../types.js";
 
 interface LeaseTaskParams {
   task: AgentTask;

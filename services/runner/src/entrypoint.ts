@@ -7,8 +7,8 @@
  */
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
-import { startCommercialSaas } from "./modes/commercial-saas.js";
-import { startOpenCore } from "./modes/open-core.js";
+import { startCommercialSaas } from "./modes/commercial-saas/index.js";
+import { startOpenCore } from "./modes/open-core/index.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();

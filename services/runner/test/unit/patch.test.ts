@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, after } from "node:test";
-import { applyPatches, loadContextFiles } from "../../src/core/patch.js";
+import { applyPatches, loadContextFiles } from "../../src/agent/patch.js";
 import { testLogger } from "../helpers.js";
 
 describe("applyPatches", () => {

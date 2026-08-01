@@ -28,9 +28,10 @@ runner-core/
 iPad / client
     │  HTTP + WebSocket
     ▼
-services/runner (Node) ──stdio JSON-RPC──► services/vfs → helm-vfs (Go)
-    │                                           │
-    └─ AgentPipeline (git worktree, LLM, tests) └─ fsnotify didChange
+services/runner (Node)
+    ├── modes/open-core | commercial-saas
+    ├── agent/   (git worktree, LLM, tests, push)
+    └── vfs/     ──stdio JSON-RPC──► services/vfs (helm-vfs / Go + fsnotify)
 ```
 
 ## Quick start

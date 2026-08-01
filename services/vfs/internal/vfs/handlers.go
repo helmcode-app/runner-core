@@ -49,6 +49,8 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, error) {
 	return InitializeResult{
 		Root:    s.root,
 		Name:    ResolveProjectName(s.root),
+		Remote:  ResolveGitRemote(s.root),
+		Branch:  ResolveGitBranch(s.root),
 		Entries: entries,
 	}, nil
 }

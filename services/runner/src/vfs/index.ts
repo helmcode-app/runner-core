@@ -15,6 +15,7 @@ export {
 export { handleVfsHttp, type VfsHttpContext } from "./http.js";
 export {
   JsonRpcCode,
+  VFS_DEFAULT_CHUNK_LIMIT,
   VfsMethod,
   type JsonRpcErrorBody,
   type JsonRpcRequest,
@@ -24,6 +25,8 @@ export {
   type VfsEntryType,
   type VfsInitializeResult,
   type VfsMethodName,
+  type VfsReadChunkParams,
+  type VfsReadChunkResult,
   type VfsReadResult,
   type VfsTreeEntry,
   type VfsWriteResult,

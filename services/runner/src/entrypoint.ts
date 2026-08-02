@@ -7,8 +7,7 @@
  */
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
-import { startCommercialSaas } from "./modes/commercial-saas/index.js";
-import { startOpenCore } from "./modes/open-core/index.js";
+import { startMode } from "./modes/index.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -21,20 +20,7 @@ async function main(): Promise<void> {
     workspaces: config.WORKSPACES_PATH,
   });
 
-  switch (config.mode) {
-    case "open-core": {
-      // Keep process alive via the listening server handle.
-      await startOpenCore(config, logger);
-      break;
-    }
-    case "commercial-saas":
-      await startCommercialSaas(config, logger);
-      break;
-    default: {
-      const _exhaustive: never = config.mode;
-      throw new Error(`Unknown HELM_MODE: ${String(_exhaustive)}`);
-    }
-  }
+  await startMode(config, logger);
 }
 
 main().catch((err: unknown) => {

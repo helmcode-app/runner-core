@@ -7,8 +7,10 @@ import {
   VfsMethod,
   type JsonRpcRequest,
   type JsonRpcResponse,
+  VFS_DEFAULT_CHUNK_LIMIT,
   type VfsDidChangeParams,
   type VfsInitializeResult,
+  type VfsReadChunkResult,
   type VfsReadResult,
   type VfsWriteResult,
 } from "./protocol.js";
@@ -133,8 +135,28 @@ export class VfsBridge extends EventEmitter {
     });
   }
 
+  /**
+   * Legacy full-file read (server rejects files larger than MaxFullReadBytes).
+   * Prefer {@link readChunk} / client-side streaming for large files.
+   */
   async read(filePath: string): Promise<VfsReadResult> {
     return this.request<VfsReadResult>(VfsMethod.Read, { path: filePath });
+  }
+
+  /**
+   * Read a bounded window via helm-vfs `file.ReadAt`.
+   * Only this RPC frame is held in memory (plus the chunk payload) — never the whole file on the Go side.
+   */
+  async readChunk(
+    filePath: string,
+    offset: number,
+    limit: number = VFS_DEFAULT_CHUNK_LIMIT,
+  ): Promise<VfsReadChunkResult> {
+    return this.request<VfsReadChunkResult>(VfsMethod.ReadChunk, {
+      path: filePath,
+      offset,
+      limit,
+    });
   }
 
   async write(filePath: string, content: string): Promise<VfsWriteResult> {

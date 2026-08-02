@@ -1,39 +1,43 @@
 # @helmcode/runner
 
-Node.js / TypeScript agent orchestration daemon for HelmCode.
+Node.js agent orchestration daemon for HelmCode.
 
 ## Modes
 
 | `HELM_MODE` | Role |
 |-------------|------|
 | `open-core` | HTTP + WebSocket API for iPad / local clients |
-| `commercial-saas` | Headless worker controlled by commercial gateway |
+| `commercial-saas` | Headless worker under commercial gateway |
 
 ## Layout
 
 ```
-services/runner/src/
-├── entrypoint.ts          # HELM_MODE bifurcation
-├── config.ts              # env validation (zod)
+src/
+├── entrypoint.ts          # boot → modes/startMode
+├── config.ts              # zod env
 ├── logger.ts
 ├── types.ts               # shared domain types
-├── agent/                 # worktree pipeline, git, LLM, tests
-│   ├── pipeline.ts
-│   ├── git.ts
-│   ├── llm.ts
-│   ├── patch.ts
-│   └── test-runner.ts
-├── http/                  # shared HTTP helpers (auth, JSON)
+├── agent/                 # orchestration core
+│   ├── pipeline.ts        # AgentPipeline (lifecycle)
+│   ├── turn.ts            # single LLM→patch turn
+│   ├── heal.ts            # self-healing test loop
+│   ├── git.ts / llm.ts / patch.ts / test-runner.ts
+│   └── index.ts
+├── http/                  # auth + JSON body helpers
 ├── modes/
-│   ├── open-core/         # standalone API + in-memory task store
-│   └── commercial-saas/   # gateway worker loop
-├── vfs/                   # helm-vfs bridge + WS/HTTP gateway
+│   ├── index.ts           # startMode()
+│   ├── open-core/
+│   │   ├── server.ts      # listen / shutdown
+│   │   ├── routes.ts      # HTTP dispatch
+│   │   └── task-store.ts  # in-memory tasks
+│   └── commercial-saas/
+├── vfs/                   # helm-vfs bridge + WS gateway
 └── util/                  # process, fs, errors
 ```
 
 ## Develop
 
-From **repo root** (npm workspaces):
+From **repo root**:
 
 ```bash
 npm ci
@@ -43,12 +47,14 @@ npm test
 npm run dev
 ```
 
-## VFS
+## Extension guide
 
-When `VFS_ENABLED=true`, open-core starts `helm-vfs` and exposes:
-
-- `ws://host:port/v1/vfs`
-- `POST /v1/vfs/rpc`
-- `GET /v1/vfs/status`
-
-Binary: `HELM_VFS_BIN` or `services/vfs/bin/helm-vfs` / `/app/bin/helm-vfs`.
+| Change | Where |
+|--------|--------|
+| Agent steps / timeout / cancel | `agent/pipeline.ts` |
+| LLM prompt / patch apply | `agent/turn.ts`, `agent/llm.ts` |
+| Test retry loop | `agent/heal.ts` |
+| New HTTP route | `modes/open-core/routes.ts` |
+| Task lifecycle API | `modes/open-core/task-store.ts` |
+| VFS RPC methods | `vfs/protocol.ts` + Go `services/vfs` |
+| Env vars | `config.ts` |

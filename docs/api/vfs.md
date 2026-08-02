@@ -80,7 +80,9 @@ index.ts          # public exports
 | `branch` | Current HEAD branch (`git symbolic-ref --short HEAD`); empty if detached / not a git repo — clients must not invent `main` |
 | `entries` | Flattened tree via `filepath.WalkDir`; skips `.git`, `node_modules` |
 
-### `vfs/read`
+### `vfs/read` (small files only)
+
+Legacy convenience for files ≤ **256 KiB**. Implemented with `os.Open` + `ReadAt` (not `os.ReadFile`). Larger files return `-32602` and must use `vfs/read_chunk`.
 
 ```json
 {"jsonrpc":"2.0","id":2,"method":"vfs/read","params":{"path":"pkg/a.go"}}
@@ -90,8 +92,32 @@ index.ts          # public exports
 {"jsonrpc":"2.0","id":2,"result":{"path":"pkg/a.go","content":"package pkg\n","size":12}}
 ```
 
-### `vfs/write`
+### `vfs/read_chunk` (preferred)
 
+Bounded segment via `file.ReadAt`. Default limit **65536** bytes; max **262144**.
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"vfs/read_chunk","params":{"path":"pkg/a.go","offset":0,"limit":65536}}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "path": "pkg/a.go",
+    "content": "…",
+    "offset": 0,
+    "bytes_read": 65536,
+    "is_eof": false,
+    "file_size": 200000
+  }
+}
+```
+
+Client loop: start `offset=0`; append `content`; if `!is_eof` then `offset += bytes_read` and request again.
+
+### `vfs/write`
 ```json
 {"jsonrpc":"2.0","id":3,"method":"vfs/write","params":{"path":"pkg/a.go","content":"package pkg\n"}}
 ```

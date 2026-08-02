@@ -9,3 +9,7 @@ export {
   httpStatusForResult,
   type TaskRecord,
 } from "./task-store.js";
+export {
+  handleOpenCoreRequest,
+  type OpenCoreRouteContext,
+} from "./routes.js";

@@ -5,6 +5,7 @@ import type {
   AgentResult,
   AgentTask,
   ProgressCallback,
+  TaskStatus,
   TestAttempt,
 } from "../types.js";
 import {
@@ -12,15 +13,11 @@ import {
   TaskAbortedError,
   throwIfAborted,
 } from "../util/errors.js";
-import { listFiles } from "../util/fs.js";
 import { GitOrchestrator } from "./git.js";
+import { runSelfHealingTests } from "./heal.js";
 import { LlmClient } from "./llm.js";
-import { applyPatches, loadContextFiles } from "./patch.js";
-import {
-  detectTestCommand,
-  formatTestFailureLog,
-  runTests,
-} from "./test-runner.js";
+import { detectTestCommand } from "./test-runner.js";
+import { applyLlmTurn } from "./turn.js";
 
 export interface AgentOptions {
   config: AppConfig;
@@ -29,10 +26,10 @@ export interface AgentOptions {
 }
 
 /**
- * Advanced agentic pipeline:
- *   fetch → worktree → LLM patch → self-healing test loop → commit → push → cleanup
+ * Agent orchestration pipeline:
+ *   fetch → worktree → LLM patch → self-healing tests → commit → push → cleanup
  *
- * Supports cooperative cancel via AbortController and hard wall-clock timeout.
+ * Supports cancel via AbortController and hard wall-clock timeout.
  */
 export class AgentPipeline {
   private readonly git: GitOrchestrator;
@@ -77,9 +74,152 @@ export class AgentPipeline {
     const maxRetries = config.MAX_TEST_RETRIES;
     const testAttempts: TestAttempt[] = [];
 
+    const { signal, clearTimeoutBudget } = this.beginTaskControl(task);
+    this.active.add(task.id);
+    this.emit(task.id, "running", "task accepted", {
+      baseBranch,
+      mainRepoPath,
+    });
+
+    let worktreePath = "";
+    let branch = "";
+    let commitSha: string | undefined;
+
+    try {
+      throwIfAborted(signal);
+
+      const handle = await this.git.createWorktree({
+        taskId: task.id,
+        mainRepoPath,
+        baseBranch,
+        remote,
+        signal,
+        ...(token !== undefined ? { token } : {}),
+      });
+      worktreePath = handle.worktreePath;
+      branch = handle.branch;
+      this.emit(task.id, "running", "worktree ready", {
+        worktreePath,
+        branch,
+      });
+      throwIfAborted(signal);
+
+      const detected = task.testCommand
+        ? { command: task.testCommand, reason: "task override" }
+        : await detectTestCommand(worktreePath);
+      this.log.info("test command selected", {
+        command: detected.command,
+        reason: detected.reason,
+      });
+
+      await applyLlmTurn(this.llm, this.log, {
+        task,
+        worktreePath,
+        attempt: 1,
+        maxAttempts: maxRetries,
+        signal,
+      });
+      throwIfAborted(signal);
+
+      const green = await runSelfHealingTests(
+        this.llm,
+        this.log,
+        (event) => this.onProgress?.(event),
+        {
+          task,
+          worktreePath,
+          testCommand: detected.command,
+          maxRetries,
+          testAttempts,
+          signal,
+        },
+      );
+      throwIfAborted(signal);
+
+      if (!green) {
+        const last = testAttempts[testAttempts.length - 1];
+        throw new Error(
+          `tests still failing after ${maxRetries} attempt(s)` +
+            (last
+              ? `\nlast exit ${last.result.exitCode}: ${last.result.stderr || last.result.stdout}`
+              : ""),
+        );
+      }
+
+      this.emit(task.id, "committing", "tests green; committing changes");
+      commitSha = await this.git.commit(
+        worktreePath,
+        `aero-agent: ${task.id}\n\n${task.prompt.slice(0, 500)}`,
+        signal,
+      );
+      this.emit(task.id, "pushing", "pushing branch to remote", {
+        branch,
+        commitSha,
+      });
+      await this.git.push({
+        worktreePath,
+        branch,
+        remote,
+        signal,
+        ...(token !== undefined ? { token } : {}),
+      });
+
+      const result = this.finishResult({
+        task,
+        status: "succeeded",
+        branch,
+        worktreePath,
+        ...(commitSha !== undefined ? { commitSha } : {}),
+        pushRemote: remote,
+        testAttempts,
+        summary: `Branch ${branch} pushed at ${commitSha ?? "HEAD"}`,
+        startedAt,
+        startedMs,
+      });
+      this.emit(task.id, "succeeded", result.summary, {
+        ...(commitSha !== undefined ? { commitSha } : {}),
+        branch,
+      });
+      return result;
+    } catch (err) {
+      return this.finishError({
+        err,
+        task,
+        branch,
+        worktreePath,
+        ...(commitSha !== undefined ? { commitSha } : {}),
+        testAttempts,
+        startedAt,
+        startedMs,
+      });
+    } finally {
+      clearTimeoutBudget();
+      this.controllers.delete(task.id);
+      if (worktreePath) {
+        try {
+          await this.git.removeWorktree(mainRepoPath, worktreePath);
+          this.log.info("worktree cleaned", { worktreePath });
+        } catch (cleanupErr) {
+          this.log.warn("worktree cleanup failed", {
+            worktreePath,
+            error:
+              cleanupErr instanceof Error
+                ? cleanupErr.message
+                : String(cleanupErr),
+          });
+        }
+      }
+      this.active.delete(task.id);
+    }
+  }
+
+  private beginTaskControl(task: AgentTask): {
+    signal: AbortSignal;
+    clearTimeoutBudget: () => void;
+  } {
     const controller = new AbortController();
     this.controllers.set(task.id, controller);
-    const signal = controller.signal;
+    const config = this.opts.config;
 
     const budgetMs =
       task.timeoutMs !== undefined
@@ -103,305 +243,95 @@ export class AgentPipeline {
       timeoutHandle.unref?.();
     }
 
-    this.active.add(task.id);
-    this.emit(task.id, "running", "task accepted", {
-      baseBranch,
-      mainRepoPath,
-      ...(budgetMs !== undefined ? { timeoutMs: budgetMs } : {}),
-    });
-
-    let worktreePath = "";
-    let branch = "";
-    let commitSha: string | undefined;
-
-    try {
-      throwIfAborted(signal);
-
-      // 1) Isolated worktree on aero-agent/<task_id>
-      const handle = await this.git.createWorktree({
-        taskId: task.id,
-        mainRepoPath,
-        baseBranch,
-        remote,
-        signal,
-        ...(token !== undefined ? { token } : {}),
-      });
-      worktreePath = handle.worktreePath;
-      branch = handle.branch;
-      this.emit(task.id, "running", "worktree ready", {
-        worktreePath,
-        branch,
-      });
-      throwIfAborted(signal);
-
-      // 2) Resolve test command
-      const detected = task.testCommand
-        ? { command: task.testCommand, reason: "task override" }
-        : await detectTestCommand(worktreePath);
-      this.log.info("test command selected", {
-        command: detected.command,
-        reason: detected.reason,
-      });
-
-      // 3) Initial LLM patch from prompt
-      await this.applyLlmTurn({
-        task,
-        worktreePath,
-        attempt: 1,
-        maxAttempts: maxRetries,
-        signal,
-      });
-      throwIfAborted(signal);
-
-      // 4) Self-healing recursive test loop (up to MAX_TEST_RETRIES)
-      const green = await this.selfHealingTestLoop({
-        task,
-        worktreePath,
-        testCommand: detected.command,
-        maxRetries,
-        testAttempts,
-        signal,
-      });
-      throwIfAborted(signal);
-
-      if (!green) {
-        const last = testAttempts[testAttempts.length - 1];
-        throw new Error(
-          `tests still failing after ${maxRetries} attempt(s)` +
-            (last
-              ? `\nlast exit ${last.result.exitCode}: ${last.result.stderr || last.result.stdout}`
-              : ""),
-        );
-      }
-
-      // 5) Auto-commit + push
-      this.emit(task.id, "committing", "tests green; committing changes");
-      commitSha = await this.git.commit(
-        worktreePath,
-        `aero-agent: ${task.id}\n\n${task.prompt.slice(0, 500)}`,
-        signal,
-      );
-      this.emit(task.id, "pushing", "pushing branch to remote", {
-        branch,
-        commitSha,
-      });
-      await this.git.push({
-        worktreePath,
-        branch,
-        remote,
-        signal,
-        ...(token !== undefined ? { token } : {}),
-      });
-
-      const finishedAt = new Date();
-      const result: AgentResult = {
-        taskId: task.id,
-        status: "succeeded",
-        branch,
-        worktreePath,
-        ...(commitSha !== undefined ? { commitSha } : {}),
-        pushRemote: remote,
-        testAttempts,
-        summary: `Branch ${branch} pushed at ${commitSha ?? "HEAD"}`,
-        startedAt: startedAt.toISOString(),
-        finishedAt: finishedAt.toISOString(),
-        durationMs: Date.now() - startedMs,
-      };
-      this.emit(task.id, "succeeded", result.summary, {
-        ...(commitSha !== undefined ? { commitSha } : {}),
-        branch,
-      });
-      return result;
-    } catch (err) {
-      if (isTaskAbortedError(err)) {
-        const status = "cancelled" as const;
-        this.log.warn("task aborted", {
-          taskId: task.id,
-          code: err.code,
-          error: err.message,
-        });
-        this.emit(task.id, "cancelled", err.message, { code: err.code });
-        return {
-          taskId: task.id,
-          status,
-          branch: branch || `aero-agent/${task.id}`,
-          worktreePath: worktreePath || "",
-          ...(commitSha !== undefined ? { commitSha } : {}),
-          testAttempts,
-          summary: err.code === "timeout" ? "task timed out" : "task cancelled",
-          error: err.message,
-          startedAt: startedAt.toISOString(),
-          finishedAt: new Date().toISOString(),
-          durationMs: Date.now() - startedMs,
-        };
-      }
-
-      const message = err instanceof Error ? err.message : String(err);
-      this.log.error("task failed", { taskId: task.id, error: message });
-      this.emit(task.id, "failed", message);
-      return {
-        taskId: task.id,
-        status: "failed",
-        branch: branch || `aero-agent/${task.id}`,
-        worktreePath: worktreePath || "",
-        ...(commitSha !== undefined ? { commitSha } : {}),
-        testAttempts,
-        summary: "task failed",
-        error: message,
-        startedAt: startedAt.toISOString(),
-        finishedAt: new Date().toISOString(),
-        durationMs: Date.now() - startedMs,
-      };
-    } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      this.controllers.delete(task.id);
-      // 6) Always reclaim disk: git worktree remove
-      if (worktreePath) {
-        try {
-          await this.git.removeWorktree(mainRepoPath, worktreePath);
-          this.log.info("worktree cleaned", { worktreePath });
-        } catch (cleanupErr) {
-          this.log.warn("worktree cleanup failed", {
-            worktreePath,
-            error:
-              cleanupErr instanceof Error
-                ? cleanupErr.message
-                : String(cleanupErr),
-          });
-        }
-      }
-      this.active.delete(task.id);
-    }
-  }
-
-  /**
-   * Recursive self-healing loop:
-   * run tests → on failure capture logs → LLM corrective patch → retry
-   * until green or maxRetries exhausted.
-   */
-  private async selfHealingTestLoop(params: {
-    task: AgentTask;
-    worktreePath: string;
-    testCommand: string;
-    maxRetries: number;
-    testAttempts: TestAttempt[];
-    signal: AbortSignal;
-    attempt?: number;
-  }): Promise<boolean> {
-    throwIfAborted(params.signal);
-    const attempt = params.attempt ?? 1;
-    this.emit(params.task.id, "testing", `test attempt ${attempt}/${params.maxRetries}`, {
-      testCommand: params.testCommand,
-    });
-
-    // Per-test command timeout is capped by remaining overall budget when set.
-    const result = await runTests(
-      params.worktreePath,
-      params.testCommand,
-      this.log,
-      {
-        signal: params.signal,
-        timeoutMs: 600_000,
+    return {
+      signal: controller.signal,
+      clearTimeoutBudget: () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
       },
-    );
-
-    if (result.exitCode === 0) {
-      params.testAttempts.push({ attempt, result, healed: false });
-      return true;
-    }
-
-    const failureLog = formatTestFailureLog(result);
-    this.log.warn("tests failed", {
-      attempt,
-      exitCode: result.exitCode,
-    });
-
-    if (attempt >= params.maxRetries) {
-      params.testAttempts.push({ attempt, result, healed: false });
-      return false;
-    }
-
-    throwIfAborted(params.signal);
-    this.emit(params.task.id, "healing", `healing from test failure (attempt ${attempt})`);
-    await this.applyLlmTurn({
-      task: params.task,
-      worktreePath: params.worktreePath,
-      attempt: attempt + 1,
-      maxAttempts: params.maxRetries,
-      testFailureLog: failureLog,
-      signal: params.signal,
-    });
-    params.testAttempts.push({ attempt, result, healed: true });
-
-    return this.selfHealingTestLoop({
-      ...params,
-      attempt: attempt + 1,
-    });
+    };
   }
 
-  private async applyLlmTurn(params: {
+  private finishResult(args: {
     task: AgentTask;
+    status: Extract<TaskStatus, "succeeded">;
+    branch: string;
     worktreePath: string;
-    attempt: number;
-    maxAttempts: number;
-    signal: AbortSignal;
-    testFailureLog?: string;
-  }): Promise<void> {
-    throwIfAborted(params.signal);
-    const fileTree = await listFiles(params.worktreePath, {
-      maxDepth: 5,
-      maxFiles: 400,
-    });
+    commitSha?: string;
+    pushRemote: string;
+    testAttempts: TestAttempt[];
+    summary: string;
+    startedAt: Date;
+    startedMs: number;
+  }): AgentResult {
+    return {
+      taskId: args.task.id,
+      status: args.status,
+      branch: args.branch,
+      worktreePath: args.worktreePath,
+      ...(args.commitSha !== undefined ? { commitSha: args.commitSha } : {}),
+      pushRemote: args.pushRemote,
+      testAttempts: args.testAttempts,
+      summary: args.summary,
+      startedAt: args.startedAt.toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - args.startedMs,
+    };
+  }
 
-    const contextPaths =
-      params.task.contextPaths && params.task.contextPaths.length > 0
-        ? params.task.contextPaths
-        : fileTree.slice(0, 40);
+  private finishError(args: {
+    err: unknown;
+    task: AgentTask;
+    branch: string;
+    worktreePath: string;
+    commitSha?: string;
+    testAttempts: TestAttempt[];
+    startedAt: Date;
+    startedMs: number;
+  }): AgentResult {
+    const base = {
+      taskId: args.task.id,
+      branch: args.branch || `aero-agent/${args.task.id}`,
+      worktreePath: args.worktreePath || "",
+      ...(args.commitSha !== undefined ? { commitSha: args.commitSha } : {}),
+      testAttempts: args.testAttempts,
+      startedAt: args.startedAt.toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - args.startedMs,
+    };
 
-    const files = await loadContextFiles(params.worktreePath, contextPaths);
-
-    const response = await this.llm.generatePatches({
-      prompt: params.task.prompt,
-      fileTree,
-      files,
-      attempt: params.attempt,
-      maxAttempts: params.maxAttempts,
-      signal: params.signal,
-      ...(params.testFailureLog !== undefined
-        ? { testFailureLog: params.testFailureLog }
-        : {}),
-    });
-
-    throwIfAborted(params.signal);
-
-    if (response.giveUp) {
-      throw new Error(
-        `LLM gave up: ${response.reason ?? response.summary}`,
-      );
-    }
-
-    if (response.patches.length === 0) {
-      this.log.info("LLM returned zero patches", {
-        summary: response.summary,
+    if (isTaskAbortedError(args.err)) {
+      this.log.warn("task aborted", {
+        taskId: args.task.id,
+        code: args.err.code,
+        error: args.err.message,
       });
-      return;
+      this.emit(args.task.id, "cancelled", args.err.message, {
+        code: args.err.code,
+      });
+      return {
+        ...base,
+        status: "cancelled",
+        summary:
+          args.err.code === "timeout" ? "task timed out" : "task cancelled",
+        error: args.err.message,
+      };
     }
 
-    const applied = await applyPatches(
-      params.worktreePath,
-      response.patches,
-      this.log,
-    );
-    this.log.info("LLM patches applied", {
-      summary: response.summary,
-      applied: applied.applied,
-      skipped: applied.skipped,
-    });
+    const message =
+      args.err instanceof Error ? args.err.message : String(args.err);
+    this.log.error("task failed", { taskId: args.task.id, error: message });
+    this.emit(args.task.id, "failed", message);
+    return {
+      ...base,
+      status: "failed",
+      summary: "task failed",
+      error: message,
+    };
   }
 
   private emit(
     taskId: string,
-    status: Parameters<ProgressCallback>[0]["status"],
+    status: TaskStatus,
     message: string,
     detail?: Record<string, unknown>,
   ): void {

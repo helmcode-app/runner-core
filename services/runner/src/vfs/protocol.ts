@@ -6,10 +6,15 @@
 export const VfsMethod = {
   Initialize: "vfs/initialize",
   Read: "vfs/read",
+  /** Bounded segment read (offset + limit); preferred for large files. */
+  ReadChunk: "vfs/read_chunk",
   Write: "vfs/write",
   Shutdown: "vfs/shutdown",
   DidChange: "vfs/didChange",
 } as const;
+
+/** Default client chunk size (bytes); matches Go DefaultChunkLimit. */
+export const VFS_DEFAULT_CHUNK_LIMIT = 64 * 1024;
 
 export type VfsMethodName = (typeof VfsMethod)[keyof typeof VfsMethod];
 
@@ -44,6 +49,21 @@ export interface VfsReadResult {
   path: string;
   content: string;
   size: number;
+}
+
+export interface VfsReadChunkParams {
+  path: string;
+  offset: number;
+  limit?: number;
+}
+
+export interface VfsReadChunkResult {
+  path: string;
+  content: string;
+  offset: number;
+  bytes_read: number;
+  is_eof: boolean;
+  file_size: number;
 }
 
 export interface VfsWriteResult {

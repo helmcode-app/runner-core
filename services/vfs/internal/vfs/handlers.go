@@ -3,6 +3,7 @@ package vfs
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -12,6 +13,13 @@ type initializeParams struct {
 
 type pathParams struct {
 	Path string `json:"path"`
+}
+
+type readChunkParams struct {
+	Path   string `json:"path"`
+	Offset int64  `json:"offset"`
+	// Limit is max bytes to read; 0 → DefaultChunkLimit.
+	Limit int `json:"limit"`
 }
 
 type writeParams struct {
@@ -25,6 +33,7 @@ func defaultHandlers() map[string]handlerFunc {
 	return map[string]handlerFunc{
 		MethodInitialize: (*Server).handleInitialize,
 		MethodRead:       (*Server).handleRead,
+		MethodReadChunk:  (*Server).handleReadChunk,
 		MethodWrite:      (*Server).handleWrite,
 		MethodShutdown:   (*Server).handleShutdown,
 	}
@@ -55,6 +64,8 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, error) {
 	}, nil
 }
 
+// handleRead loads small files only (≤ MaxFullReadBytes) via ReadAt — never os.ReadFile.
+// Large files must use vfs/read_chunk.
 func (s *Server) handleRead(params json.RawMessage) (any, error) {
 	var p pathParams
 	if err := json.Unmarshal(params, &p); err != nil || p.Path == "" {
@@ -64,11 +75,113 @@ func (s *Server) handleRead(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, rpcErr(CodeInvalidParams, err.Error())
 	}
-	data, err := os.ReadFile(abs)
+
+	f, err := os.Open(abs)
 	if err != nil {
 		return nil, rpcErr(CodeInternalError, err.Error())
 	}
-	return ReadResult{Path: rel, Content: string(data), Size: len(data)}, nil
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return nil, rpcErr(CodeInternalError, err.Error())
+	}
+	size := st.Size()
+	if size > MaxFullReadBytes {
+		return nil, rpcErr(
+			CodeInvalidParams,
+			fmt.Sprintf(
+				"file too large for vfs/read (%d bytes); use vfs/read_chunk (max full read %d)",
+				size,
+				MaxFullReadBytes,
+			),
+		)
+	}
+	if size == 0 {
+		return ReadResult{Path: rel, Content: "", Size: 0}, nil
+	}
+
+	buf := make([]byte, int(size))
+	n, err := f.ReadAt(buf, 0)
+	if err != nil && err != io.EOF {
+		return nil, rpcErr(CodeInternalError, err.Error())
+	}
+	buf = buf[:n]
+	return ReadResult{Path: rel, Content: string(buf), Size: n}, nil
+}
+
+// handleReadChunk reads a bounded window via file.ReadAt (kernel segment fetch).
+func (s *Server) handleReadChunk(params json.RawMessage) (any, error) {
+	var p readChunkParams
+	if err := json.Unmarshal(params, &p); err != nil || p.Path == "" {
+		return nil, rpcErr(CodeInvalidParams, "path is required")
+	}
+	if p.Offset < 0 {
+		return nil, rpcErr(CodeInvalidParams, "offset must be >= 0")
+	}
+
+	limit := p.Limit
+	if limit <= 0 {
+		limit = DefaultChunkLimit
+	}
+	if limit > MaxChunkLimit {
+		limit = MaxChunkLimit
+	}
+
+	abs, rel, err := resolveSafe(s.root, p.Path)
+	if err != nil {
+		return nil, rpcErr(CodeInvalidParams, err.Error())
+	}
+
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil, rpcErr(CodeInternalError, err.Error())
+	}
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return nil, rpcErr(CodeInternalError, err.Error())
+	}
+	fileSize := st.Size()
+
+	if p.Offset >= fileSize {
+		return ReadChunkResult{
+			Path:      rel,
+			Content:   "",
+			Offset:    p.Offset,
+			BytesRead: 0,
+			IsEOF:     true,
+			FileSize:  fileSize,
+		}, nil
+	}
+
+	// Bound buffer strictly to limit (never allocate full file).
+	buf := make([]byte, limit)
+	n, err := f.ReadAt(buf, p.Offset)
+	isEOF := false
+	if err == io.EOF {
+		isEOF = true
+		err = nil
+	}
+	if err != nil {
+		return nil, rpcErr(CodeInternalError, err.Error())
+	}
+	buf = buf[:n]
+
+	// EOF when short read or next offset at/ past end.
+	if int64(n) < int64(limit) || p.Offset+int64(n) >= fileSize {
+		isEOF = true
+	}
+
+	return ReadChunkResult{
+		Path:      rel,
+		Content:   string(buf),
+		Offset:    p.Offset,
+		BytesRead: n,
+		IsEOF:     isEOF,
+		FileSize:  fileSize,
+	}, nil
 }
 
 func (s *Server) handleWrite(params json.RawMessage) (any, error) {

@@ -4,9 +4,18 @@ package vfs
 const (
 	MethodInitialize = "vfs/initialize"
 	MethodRead       = "vfs/read"
+	MethodReadChunk  = "vfs/read_chunk"
 	MethodWrite      = "vfs/write"
 	MethodShutdown   = "vfs/shutdown"
 	MethodDidChange  = "vfs/didChange"
+)
+
+// Chunk size bounds for vfs/read_chunk (bytes).
+const (
+	DefaultChunkLimit = 64 * 1024
+	MaxChunkLimit     = 256 * 1024
+	// MaxFullReadBytes caps legacy vfs/read; larger files must use read_chunk.
+	MaxFullReadBytes = 256 * 1024
 )
 
 // Entry types returned by vfs/initialize.
@@ -52,11 +61,22 @@ type InitializeResult struct {
 	Entries []TreeEntry `json:"entries"`
 }
 
-// ReadResult is returned by vfs/read.
+// ReadResult is returned by vfs/read (small files only).
 type ReadResult struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 	Size    int    `json:"size"`
+}
+
+// ReadChunkResult is returned by vfs/read_chunk.
+type ReadChunkResult struct {
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+	Offset    int64  `json:"offset"`
+	BytesRead int    `json:"bytes_read"`
+	IsEOF     bool   `json:"is_eof"`
+	// FileSize is the total size at open time (may change under concurrent writers).
+	FileSize int64 `json:"file_size"`
 }
 
 // WriteResult is returned by vfs/write.

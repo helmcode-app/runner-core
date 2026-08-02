@@ -29,9 +29,9 @@ iPad / client
     │  HTTP + WebSocket
     ▼
 services/runner (Node)
-    ├── modes/open-core | commercial-saas
-    ├── agent/   (git worktree, LLM, tests, push)
-    └── vfs/     ──stdio JSON-RPC──► services/vfs (helm-vfs / Go + fsnotify)
+    ├── modes/          open-core (routes + task-store) | commercial-saas
+    ├── agent/          pipeline · turn · heal · git · llm
+    └── vfs/            ──stdio JSON-RPC──► services/vfs (helm-vfs)
 ```
 
 ## Quick start

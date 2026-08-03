@@ -1,6 +1,6 @@
-# Open-core HTTP API
+# Open-core HTTP + WebSocket API
 
-Standalone monolithic HTTP API for local / iPad clients.
+Standalone monolithic HTTP + WebSocket API for local / iPad clients.
 
 | Item | Value |
 |------|-------|
@@ -9,13 +9,16 @@ Standalone monolithic HTTP API for local / iPad clients.
 | Content type | `application/json; charset=utf-8` |
 | Auth | Optional Bearer (`OPENCORE_API_TOKEN`). When set, all routes **except** `GET /health` require `Authorization: Bearer <token>`. When unset, API is open (dev only). |
 | Body size limit | 2 MiB |
-| Implementation | `src/modes/open-core.ts` |
+| Implementation | `services/runner/src/modes/open-core/` |
+| Agent engine | `HelmCodeAgentEngine` (`services/runner/src/agent/agentEngine.ts`) |
 
-Shared schemas: [shared-types.md](./shared-types.md).
+Shared schemas: [shared-types.md](./shared-types.md). VFS WebSocket: [vfs.md](./vfs.md).
 
 ---
 
 ## Overview
+
+### HTTP
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -26,6 +29,13 @@ Shared schemas: [shared-types.md](./shared-types.md).
 | `POST` | `/v1/tasks/:id/cancel` | yes* | Cancel in-flight task |
 | `POST` | `/v1/tasks/sync` | yes* | Synchronous task run (blocks until done) |
 
+### WebSocket
+
+| Path | Auth | Description |
+|------|------|-------------|
+| `/v1/agent` | yes* | Agent JSON-RPC (`agent/run`, `agent/cancel`, `agent/status`, `agent/list`) |
+| `/v1/vfs` | yes* | VFS JSON-RPC (file tree / chunked read / write) |
+
 \* Required only when `OPENCORE_API_TOKEN` is configured. Missing/invalid token → `401 {"error":"unauthorized"}`.
 
 Common response headers:
@@ -34,6 +44,86 @@ Common response headers:
 |--------|-------|
 | `Content-Type` | `application/json; charset=utf-8` |
 | `Cache-Control` | `no-store` |
+
+---
+
+## WebSocket `agent/*` (iPad orchestration)
+
+Connect to `ws://<host>:<port>/v1/agent` (upgrade). Same Bearer auth as HTTP.
+
+### `agent/run`
+
+Starts `HelmCodeAgentEngine`: worktree → `ContextBuilder` (only `contextPaths`) → LLM structured file rewrites → recursive `runTestAndHeal` (default max 3 cycles) → auto-commit → push `aero-agent/<taskId>`.
+
+**Request**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "agent/run",
+  "params": {
+    "taskId": "task-001",
+    "prompt": "Fix the failing unit tests in the auth package",
+    "baseBranch": "main",
+    "testCommand": "go test ./...",
+    "contextPaths": ["pkg/auth/login.go", "pkg/auth/login_test.go"],
+    "githubToken": "ghp_…",
+    "maxCycles": 3
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `taskId` | `string` | no* | Task id (`id` alias accepted). Default UUID. Branch: `aero-agent/<taskId>`. |
+| `prompt` | `string` | **yes** | Agent instruction |
+| `baseBranch` | `string` | no | Base branch (default `DEFAULT_BASE_BRANCH`) |
+| `testCommand` | `string` | no | Sandbox shell test command |
+| `contextPaths` | `string[]` | no | **Only** these relative files are loaded into the LLM context |
+| `githubToken` | `string` | no | Push auth (falls back to `GITHUB_TOKEN`) |
+| `maxCycles` | `number` | no | Self-heal cycles (default `MAX_TEST_RETRIES` / 3) |
+
+\* Either `taskId` or `id` may identify the task; one is generated if both omitted.
+
+**Immediate result** (async by default)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "taskId": "task-001",
+    "status": "accepted",
+    "branch": "aero-agent/task-001"
+  }
+}
+```
+
+**Notifications** on the same socket:
+
+| Method | When |
+|--------|------|
+| `agent/progress` | Every timeline event (`stage`, `cycle`, `message`, …) |
+| `agent/done` | Terminal result (`status`: `success` \| `failed` \| `cancelled`) |
+
+Timeline stages include: `accepted`, `worktree_ready`, `context_built`, `llm_invoke`, `llm_patched`, `testing`, `test_passed`, `test_failed`, `self_healing`, `committing`, `pushing`, `success`, `failed`, `cancelled`.
+
+On test failure (while cycles remain) the engine does **not** surface an end-user alert; it records `stage: "test_failed"` and runs the self-healing LLM rewrite. Green tests commit with:
+
+```text
+AI Auto-Refactor [HelmCode]: <prompt_summary>
+```
+
+and push `aero-agent/<taskId>`.
+
+### `agent/status` / `agent/cancel` / `agent/list`
+
+```json
+{ "jsonrpc": "2.0", "id": 2, "method": "agent/status", "params": { "taskId": "task-001" } }
+{ "jsonrpc": "2.0", "id": 3, "method": "agent/cancel", "params": { "taskId": "task-001" } }
+{ "jsonrpc": "2.0", "id": 4, "method": "agent/list", "params": {} }
+```
 
 ---
 

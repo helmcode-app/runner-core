@@ -30,6 +30,8 @@ export interface AgentTask {
   remote?: string;
   /** Extra context files the LLM may inspect (relative to worktree). */
   contextPaths?: string[];
+  /** Self-heal cycle budget (1–10). Falls back to MAX_TEST_RETRIES / 3. */
+  maxCycles?: number;
   /**
    * Hard wall-clock budget for the entire agent run (ms).
    * When exceeded the pipeline aborts (kills in-flight subprocesses) with status `cancelled`.
@@ -86,15 +88,88 @@ export interface AgentResult {
   durationMs: number;
 }
 
+/**
+ * Structured timeline stages for agent orchestration events.
+ * Surfaced on task memory `events[]` and WebSocket progress notifications.
+ */
+export type AgentEventStage =
+  | "accepted"
+  | "worktree_ready"
+  | "context_built"
+  | "llm_invoke"
+  | "llm_patched"
+  | "testing"
+  | "test_passed"
+  | "test_failed"
+  | "self_healing"
+  | "committing"
+  | "pushing"
+  | "success"
+  | "failed"
+  | "cancelled";
+
 export interface TaskProgressEvent {
   taskId: string;
   status: TaskStatus;
   message: string;
   at: string;
+  /** High-level orchestration stage (timeline element). */
+  stage?: AgentEventStage;
+  /** Heal / test cycle number (1-based) when applicable. */
+  cycle?: number;
   detail?: Record<string, unknown>;
 }
 
 export type ProgressCallback = (event: TaskProgressEvent) => void;
+
+/**
+ * JSON-RPC `agent/run` params from iPad / open-core WebSocket clients.
+ */
+export interface AgentRunParams {
+  /** Stable unique id (branch: aero-agent/<taskId>). */
+  taskId: string;
+  /** Natural-language instruction for the coding agent. */
+  prompt: string;
+  /** Base branch to branch from (defaults to DEFAULT_BASE_BRANCH). */
+  baseBranch?: string;
+  /** Test command executed inside the sandbox worktree. */
+  testCommand?: string;
+  /**
+   * Relative paths whose raw contents form the LLM surgical context.
+   * Only these files are loaded — never the whole tree.
+   */
+  contextPaths?: string[];
+  /** GitHub PAT / installation token for authenticated push. */
+  githubToken?: string;
+  /** Self-heal cycles (default 3). */
+  maxCycles?: number;
+  /** Optional main-repo path override. */
+  repoPath?: string;
+  /** Remote name (default origin). */
+  remote?: string;
+  /** Hard wall-clock budget (ms). */
+  timeoutMs?: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** Accepted `agent/run` immediate result (task continues asynchronously). */
+export interface AgentRunAccepted {
+  taskId: string;
+  status: "accepted" | "queued" | "running";
+  branch: string;
+  poll?: string;
+  cancel?: string;
+}
+
+/** Live snapshot returned by `agent/status`. */
+export interface AgentTaskSnapshot {
+  taskId: string;
+  status: TaskStatus;
+  branch: string;
+  events: TaskProgressEvent[];
+  result: AgentResult | null;
+  active: boolean;
+}
 
 /** JSON-RPC 2.0 primitives for commercial-saas gateway control. */
 export interface JsonRpcRequest<T = unknown> {

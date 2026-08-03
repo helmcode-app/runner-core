@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { HelmMode } from "./types.js";
+import { isPlaceholderGithubToken } from "./util/github-token.js";
 
 const helmModeSchema = z.enum(["open-core", "commercial-saas"]);
 
@@ -76,6 +77,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   const data = parsed.data;
+  // Drop compose smoke placeholders so they never poison git Authorization.
+  if (isPlaceholderGithubToken(data.GITHUB_TOKEN)) {
+    delete (data as { GITHUB_TOKEN?: string }).GITHUB_TOKEN;
+  }
   const mode = data.HELM_MODE;
 
   if (mode === "commercial-saas") {

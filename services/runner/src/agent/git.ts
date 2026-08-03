@@ -3,6 +3,12 @@ import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { ensureDir, pathExists } from "../util/fs.js";
 import { runCommand, runCommandOrThrow } from "../util/process.js";
+import {
+  redactGitSecrets,
+  resolveGithubToken,
+} from "../util/github-token.js";
+
+export { resolveGithubToken, redactGitSecrets } from "../util/github-token.js";
 
 export interface WorktreeHandle {
   taskId: string;
@@ -22,8 +28,29 @@ export function branchNameForTask(taskId: string): string {
   return `aero-agent/${sanitizeTaskId(taskId)}`;
 }
 
-export function worktreeDirForTask(workspacesPath: string, taskId: string): string {
+export function worktreeDirForTask(
+  workspacesPath: string,
+  taskId: string,
+): string {
   return path.join(workspacesPath, `ws_${sanitizeTaskId(taskId)}`);
+}
+
+function wrapGitError(err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  const redacted = redactGitSecrets(msg);
+  if (/terminal prompts disabled/i.test(redacted)) {
+    return new Error(
+      `${redacted}\n` +
+        "Hint: git cannot prompt for credentials in the agent sandbox. " +
+        "Set a valid GITHUB_TOKEN (ghp_…) in runner-core/.env or pass " +
+        "agent/run.githubToken. Do not put a fake token in GITHUB_TOKEN. " +
+        "Open Project Bearer is OPENCORE_API_TOKEN, not a GitHub PAT.",
+    );
+  }
+  if (err instanceof Error) {
+    return new Error(redacted, { cause: err });
+  }
+  return new Error(redacted);
 }
 
 export class GitOrchestrator {
@@ -34,17 +61,21 @@ export class GitOrchestrator {
 
   private gitEnv(token?: string): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
+      // Never hang waiting for interactive username/password in the sandbox.
       GIT_TERMINAL_PROMPT: "0",
       GIT_AUTHOR_NAME: this.config.GIT_USER_NAME,
       GIT_AUTHOR_EMAIL: this.config.GIT_USER_EMAIL,
       GIT_COMMITTER_NAME: this.config.GIT_USER_NAME,
       GIT_COMMITTER_EMAIL: this.config.GIT_USER_EMAIL,
     };
-    // Prefer HTTPS token auth via extraheader when a token is supplied.
-    if (token) {
+    // Prefer HTTPS token auth via extraheader when a *real* token is supplied.
+    // Invalid/placeholder tokens must not be injected — they override URL creds
+    // and cause: fatal: could not read Password … terminal prompts disabled.
+    const resolved = resolveGithubToken(token);
+    if (resolved) {
       env.GIT_CONFIG_COUNT = "1";
       env.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader";
-      env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+      env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${resolved}`).toString("base64")}`;
     }
     return env;
   }
@@ -75,12 +106,16 @@ export class GitOrchestrator {
     signal?: AbortSignal,
   ): Promise<void> {
     this.log.info("git fetch", { mainRepoPath, remote });
-    await runCommandOrThrow("git", ["fetch", "--prune", "--tags", remote], {
-      cwd: mainRepoPath,
-      env: this.gitEnv(token),
-      timeoutMs: 120_000,
-      ...(signal !== undefined ? { signal } : {}),
-    });
+    try {
+      await runCommandOrThrow("git", ["fetch", "--prune", "--tags", remote], {
+        cwd: mainRepoPath,
+        env: this.gitEnv(token),
+        timeoutMs: 120_000,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+    } catch (err) {
+      throw wrapGitError(err);
+    }
   }
 
   async createWorktree(params: {
@@ -195,10 +230,12 @@ export class GitOrchestrator {
     signal?: AbortSignal;
   }): Promise<void> {
     const remote = params.remote ?? "origin";
-    const token = params.token ?? this.config.GITHUB_TOKEN;
+    const token = resolveGithubToken(params.token, this.config.GITHUB_TOKEN);
     if (!token) {
       throw new Error(
-        "github_token / GITHUB_TOKEN is required to push agent branches",
+        "github_token / GITHUB_TOKEN is required to push agent branches. " +
+          "Set a real PAT in runner-core/.env (GITHUB_TOKEN=ghp_…) or pass " +
+          "agent/run params.githubToken. Open Project API token is NOT a GitHub token.",
       );
     }
     this.log.info("git push", {
@@ -206,16 +243,20 @@ export class GitOrchestrator {
       branch: params.branch,
       remote,
     });
-    await runCommandOrThrow(
-      "git",
-      ["push", "-u", remote, `HEAD:refs/heads/${params.branch}`],
-      {
-        cwd: params.worktreePath,
-        env: this.gitEnv(token),
-        timeoutMs: 120_000,
-        ...(params.signal !== undefined ? { signal: params.signal } : {}),
-      },
-    );
+    try {
+      await runCommandOrThrow(
+        "git",
+        ["push", "-u", remote, `HEAD:refs/heads/${params.branch}`],
+        {
+          cwd: params.worktreePath,
+          env: this.gitEnv(token),
+          timeoutMs: 120_000,
+          ...(params.signal !== undefined ? { signal: params.signal } : {}),
+        },
+      );
+    } catch (err) {
+      throw wrapGitError(err);
+    }
   }
 
   async removeWorktree(

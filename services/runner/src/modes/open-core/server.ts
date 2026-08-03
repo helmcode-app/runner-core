@@ -1,7 +1,12 @@
 import { createServer, type Server } from "node:http";
+import {
+  AgentPipeline,
+  createAgentGateway,
+  type AgentGateway,
+} from "../../agent/index.js";
 import type { AppConfig } from "../../config.js";
-import { AgentPipeline } from "../../agent/index.js";
 import type { Logger } from "../../logger.js";
+import type { TaskProgressEvent } from "../../types.js";
 import { sendJson } from "../../http/index.js";
 import {
   createVfsGateway,
@@ -16,6 +21,7 @@ export interface OpenCoreServer {
   port: number;
   baseUrl: string;
   agent: AgentPipeline;
+  agentGateway: AgentGateway;
   vfs: VfsGateway;
   close(): Promise<void>;
 }
@@ -26,6 +32,10 @@ export interface StartOpenCoreOptions {
 
 /**
  * Standalone HTTP + WebSocket API for iPad / local clients (HELM_MODE=open-core).
+ *
+ * WebSocket endpoints:
+ * - `/v1/vfs`  — VFS JSON-RPC (file tree / read_chunk / write)
+ * - `/v1/agent` — Agent JSON-RPC (`agent/run`, cancel, status)
  */
 export async function startOpenCore(
   config: AppConfig,
@@ -45,10 +55,17 @@ export async function startOpenCore(
     log.info("open-core API auth enabled (Bearer token)");
   }
 
+  // Progress sinks: task store + live agent WebSocket fan-out (bound after gateway).
+  let agentGatewayRef: AgentGateway | null = null;
+  const onProgress = (event: TaskProgressEvent): void => {
+    store.onProgress(event);
+    agentGatewayRef?.broadcastProgress(event);
+  };
+
   const agent = new AgentPipeline({
     config,
     logger,
-    onProgress: (event) => store.onProgress(event),
+    onProgress,
   });
 
   const vfsHolder: { current: VfsGateway } = {
@@ -74,7 +91,17 @@ export async function startOpenCore(
     }
   });
 
+  // VFS WS gateway (/v1/vfs)
   vfsHolder.current = await createVfsGateway(server, config, logger);
+
+  // Agent WS gateway (/v1/agent) — shares the same HelmCodeAgentEngine.
+  const agentGateway = createAgentGateway(
+    server,
+    agent.underlying,
+    config,
+    logger,
+  );
+  agentGatewayRef = agentGateway;
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -92,9 +119,11 @@ export async function startOpenCore(
     host: config.HOST,
     port,
     vfs: Boolean(vfsHolder.current.bridge),
+    agentWs: "/v1/agent",
   });
 
   const close = async (): Promise<void> => {
+    await agentGateway.close();
     await vfsHolder.current.close();
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
@@ -120,6 +149,7 @@ export async function startOpenCore(
     port,
     baseUrl: `http://${host}:${port}`,
     agent,
+    agentGateway,
     vfs: vfsHolder.current,
     close,
   };

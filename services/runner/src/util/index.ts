@@ -18,3 +18,9 @@ export {
   runShell,
   type RunCommandOptions,
 } from "./process.js";
+export {
+  resolveGithubToken,
+  redactGitSecrets,
+  isPlaceholderGithubToken,
+  PLACEHOLDER_GITHUB_TOKENS,
+} from "./github-token.js";

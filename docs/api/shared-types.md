@@ -70,6 +70,52 @@ interface OpenCoreSubmitBody {
 
 ---
 
+## `AgentRunParams`
+
+JSON-RPC `agent/run` params (WebSocket `/v1/agent`).
+
+```ts
+interface AgentRunParams {
+  taskId: string;
+  prompt: string;
+  baseBranch?: string;
+  testCommand?: string;
+  contextPaths?: string[];
+  githubToken?: string;
+  maxCycles?: number;
+  repoPath?: string;
+  remote?: string;
+  timeoutMs?: number;
+  metadata?: Record<string, unknown>;
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `taskId` | `string` | **yes*** | Task id; branch `aero-agent/<taskId>`. (`id` alias accepted by the router.) |
+| `prompt` | `string` | **yes** | Agent instruction |
+| `baseBranch` | `string` | no | Base branch |
+| `testCommand` | `string` | no | Sandbox test command |
+| `contextPaths` | `string[]` | no | **Only** these files are read into the LLM surgical context |
+| `githubToken` | `string` | no | GitHub token for authenticated push |
+| `maxCycles` | `number` | no | Self-heal cycles (default 3) |
+
+\* Router generates a UUID when omitted.
+
+### `AgentEventStage`
+
+Structured timeline stages on task `events[]`:
+
+```ts
+type AgentEventStage =
+  | "accepted" | "worktree_ready" | "context_built"
+  | "llm_invoke" | "llm_patched"
+  | "testing" | "test_passed" | "test_failed" | "self_healing"
+  | "committing" | "pushing" | "success" | "failed" | "cancelled";
+```
+
+---
+
 ## `AgentTask`
 
 Full task object used by the agent pipeline and commercial-saas leases.

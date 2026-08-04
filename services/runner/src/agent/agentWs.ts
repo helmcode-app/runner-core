@@ -1,8 +1,10 @@
-import type { IncomingMessage, Server } from "node:http";
-import type { Duplex } from "node:stream";
+import type { Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AppConfig } from "../config.js";
-import { authorize } from "../http/index.js";
+import {
+  attachAuthenticatedUpgrade,
+  closeWebSockets,
+} from "../http/index.js";
 import type { Logger } from "../logger.js";
 import type { JsonRpcRequest, TaskProgressEvent } from "../types.js";
 import type { HelmCodeAgentEngine } from "./agentEngine.js";
@@ -22,17 +24,12 @@ export interface AgentGateway {
 }
 
 /**
- * Attach JSON-RPC WebSocket gateway for agent control on `/v1/agent`.
+ * JSON-RPC WebSocket gateway on `/v1/agent` (unified open-core ingress).
  *
- * iPad clients open a WebSocket, send:
- * ```json
- * { "jsonrpc":"2.0", "id":1, "method":"agent/run",
- *   "params": { "taskId","prompt","baseBranch","testCommand","contextPaths","githubToken" } }
- * ```
- * and receive the accepted envelope plus `agent/progress` / `agent/done`
- * notifications on the same socket.
+ * Clients send `agent/run` / cancel / status and receive `agent/progress` +
+ * `agent/done` notifications on the same socket.
  */
-export function attachAgentWebSocket(
+export function createAgentGateway(
   server: Server,
   engine: HelmCodeAgentEngine,
   config: AppConfig,
@@ -61,27 +58,11 @@ export function attachAgentWebSocket(
     }
   };
 
-  const onUpgrade = (
-    req: IncomingMessage,
-    socket: Duplex,
-    head: Buffer,
-  ): void => {
-    const host = req.headers.host ?? "localhost";
-    const url = new URL(req.url ?? "/", `http://${host}`);
-    if (url.pathname !== AGENT_WS_PATH) {
-      return;
-    }
-    if (!authorize(req, apiToken)) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
-  };
-
-  server.on("upgrade", onUpgrade);
+  const onUpgrade = attachAuthenticatedUpgrade(server, {
+    path: AGENT_WS_PATH,
+    wss,
+    apiToken,
+  });
 
   wss.on("connection", (ws: WebSocket) => {
     sockets.add(ws);
@@ -109,30 +90,15 @@ export function attachAgentWebSocket(
     broadcastProgress,
     close: async () => {
       server.off("upgrade", onUpgrade);
-      for (const ws of sockets) {
-        try {
-          ws.close();
-        } catch {
-          /* ignore */
-        }
-      }
+      closeWebSockets(sockets);
       sockets.clear();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
   };
 }
 
-/**
- * Create engine WebSocket gateway on the given HTTP server.
- */
-export function createAgentGateway(
-  server: Server,
-  engine: HelmCodeAgentEngine,
-  config: AppConfig,
-  logger: Logger,
-): AgentGateway {
-  return attachAgentWebSocket(server, engine, config, logger);
-}
+/** @deprecated Prefer {@link createAgentGateway}. */
+export const attachAgentWebSocket = createAgentGateway;
 
 async function handleMessage(
   ws: WebSocket,

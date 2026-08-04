@@ -11,6 +11,7 @@
     "build": "npm run build -w @helmcode/runner",
     "build:runner": "npm run build -w @helmcode/runner",
     "build:vfs": "cd services/vfs && go build -o bin/helm-vfs ./cmd/helm-vfs",
+    "build:webssh": "cd services/webssh && go build -o bin/helm-webssh .",
     "dev": "npm run dev -w @helmcode/runner",
     "start": "npm run start -w @helmcode/runner",
     "typecheck": "npm run typecheck -w @helmcode/runner",

@@ -14,33 +14,49 @@ Node.js agent orchestration daemon for HelmCode.
 ```
 src/
 ├── entrypoint.ts              # boot → modes/startMode
-├── config.ts                  # zod env (+ strip placeholder GITHUB_TOKEN)
+├── config.ts                  # zod env (grouped; envBool helper)
 ├── logger.ts
 ├── types.ts                   # shared domain types
 ├── agent/                     # orchestration core
-│   ├── agentEngine.ts         # HelmCodeAgentEngine (pipeline orchestrator)
+│   ├── agentEngine.ts         # HelmCodeAgentEngine
 │   ├── heal-loop.ts           # recursive runTestAndHeal
-│   ├── llm-apply.ts           # LLM → structured patches → disk
-│   ├── contextBuilder.ts      # surgical contextPaths-only loader
+│   ├── llm-apply.ts           # LLM → patches → disk
+│   ├── contextBuilder.ts      # contextPaths-only loader
 │   ├── params.ts / prompts.ts / events.ts
 │   ├── agentRouter.ts         # JSON-RPC agent/* controller
-│   ├── agentWs.ts             # WebSocket /v1/agent gateway
-│   ├── pipeline.ts            # AgentPipeline façade (HTTP / SaaS)
+│   ├── agentWs.ts             # WebSocket /v1/agent
+│   ├── pipeline.ts            # façade for HTTP / SaaS
 │   ├── git.ts / llm.ts / patch.ts / test-runner.ts
 │   └── index.ts
-├── http/                      # auth + JSON body helpers
+├── http/                      # auth, JSON, shared WS upgrade
+│   ├── auth.ts                # Bearer + WS query token
+│   ├── ws-upgrade.ts          # attachAuthenticatedUpgrade
+│   └── json.ts
 ├── modes/
-│   ├── index.ts               # startMode()
 │   ├── open-core/
-│   │   ├── server.ts          # listen / shutdown (+ agent + vfs WS)
-│   │   ├── routes.ts          # HTTP dispatch
-│   │   └── task-store.ts      # in-memory tasks
+│   │   ├── server.ts          # listen + mount gateways
+│   │   ├── routes.ts
+│   │   └── task-store.ts
 │   └── commercial-saas/
+├── terminal/                  # WebSSH: WS ↔ in-process PTY
 ├── vfs/                       # helm-vfs bridge + WS gateway
-└── util/                      # process, fs, errors, github-token
+└── util/                      # process, fs, errors, github-token, env
 ```
 
-## Agent pipeline (fixed)
+## Unified ingress (open-core)
+
+Same host/port for all surfaces:
+
+| Path | Protocol |
+|------|----------|
+| `/health`, `/v1/tasks`, … | HTTP |
+| `/v1/vfs` | WebSocket JSON-RPC |
+| `/v1/agent` | WebSocket JSON-RPC |
+| `/v1/terminal` (+ `/api/v1/terminal/ws`) | WebSocket binary + control JSON |
+
+Auth: `OPENCORE_API_TOKEN` as `Authorization: Bearer` or Upgrade `?token=`.
+
+## Agent pipeline
 
 ```
 agent/run
@@ -52,13 +68,11 @@ agent/run
   → cleanup worktree
 ```
 
-Credentials:
-
-| Env / field | Purpose |
-|-------------|---------|
-| `OPENCORE_API_TOKEN` | Bearer for HTTP + `/v1/vfs` + `/v1/agent` |
-| `GITHUB_TOKEN` / `agent/run.githubToken` | git fetch / push (real PAT only) |
-| `LLM_API_KEY` | chat completions for patches |
+| Credential | Purpose |
+|------------|---------|
+| `OPENCORE_API_TOKEN` | HTTP + all WebSockets |
+| `GITHUB_TOKEN` / `agent/run.githubToken` | git fetch / push |
+| `LLM_API_KEY` | chat completions |
 
 ## Develop
 
@@ -76,13 +90,13 @@ npm run dev
 
 | Change | Where |
 |--------|--------|
-| Orchestration steps / timeout / cancel | `agent/agentEngine.ts` |
-| Self-heal recursion | `agent/heal-loop.ts` |
-| LLM patch apply | `agent/llm-apply.ts`, `agent/llm.ts`, `agent/patch.ts` |
-| Surgical context | `agent/contextBuilder.ts` |
-| WebSocket `agent/run` | `agent/agentRouter.ts`, `agent/agentWs.ts` |
-| New HTTP route | `modes/open-core/routes.ts` |
-| Task lifecycle API | `modes/open-core/task-store.ts` |
-| VFS RPC methods | `vfs/protocol.ts` + Go `services/vfs` |
+| Orchestration / cancel / timeout | `agent/agentEngine.ts` |
+| Self-heal | `agent/heal-loop.ts` |
+| LLM patches | `agent/llm-apply.ts`, `llm.ts`, `patch.ts` |
+| Context loading | `agent/contextBuilder.ts` |
+| Agent WS methods | `agent/agentRouter.ts`, `agentWs.ts` |
+| Shared WS auth / upgrade | `http/auth.ts`, `http/ws-upgrade.ts` |
+| Terminal PTY | `terminal/` |
+| VFS | `vfs/` + Go `services/vfs` |
+| HTTP routes | `modes/open-core/routes.ts` |
 | Env vars | `config.ts` |
-| GitHub PAT placeholders | `util/github-token.ts` |

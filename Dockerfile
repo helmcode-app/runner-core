@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
       git \
+      bash \
       openssh-client \
       python3 \
       build-essential \

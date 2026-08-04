@@ -157,3 +157,6 @@ vendor/
 
 # Local iPad client symlink (do not commit)
 HelmCode
+
+# Optional Go WebSSH build output
+services/webssh/bin/

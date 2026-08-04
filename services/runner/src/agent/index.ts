@@ -1,13 +1,11 @@
 /**
  * Agent orchestration: git worktrees, LLM patches, self-healing tests, push.
  *
- * Layout (see also services/runner/README.md):
- * - agentEngine.ts  HelmCodeAgentEngine (orchestrator)
- * - heal-loop.ts    recursive test + self-heal
- * - llm-apply.ts    LLM → structured patches → disk
- * - contextBuilder  surgical contextPaths-only loader
- * - agentRouter/Ws  JSON-RPC controller + WebSocket gateway
- * - pipeline        thin façade for HTTP / SaaS modes
+ * ```
+ * agentEngine  →  heal-loop / llm-apply / contextBuilder
+ * agentRouter  →  agentWs  (/v1/agent)
+ * pipeline     →  HTTP + commercial-saas façade
+ * ```
  */
 
 export {
@@ -36,8 +34,8 @@ export {
 } from "./agentRouter.js";
 
 export {
-  attachAgentWebSocket,
   createAgentGateway,
+  attachAgentWebSocket,
   AGENT_WS_PATH,
   type AgentGateway,
 } from "./agentWs.js";
@@ -50,13 +48,6 @@ export {
   worktreeDirForTask,
   type WorktreeHandle,
 } from "./git.js";
-
-export {
-  resolveGithubToken,
-  redactGitSecrets,
-  isPlaceholderGithubToken,
-  PLACEHOLDER_GITHUB_TOKENS,
-} from "../util/github-token.js";
 
 export {
   LlmClient,
@@ -78,6 +69,15 @@ export {
   type DetectedTestCommand,
 } from "./test-runner.js";
 
-export { runTestAndHeal, type RunTestAndHealArgs, type HealLoopDeps } from "./heal-loop.js";
-export { invokeLlmAndApplyPatches, type LlmApplyArgs } from "./llm-apply.js";
+export {
+  runTestAndHeal,
+  type RunTestAndHealArgs,
+  type HealLoopDeps,
+} from "./heal-loop.js";
+
+export {
+  invokeLlmAndApplyPatches,
+  type LlmApplyArgs,
+} from "./llm-apply.js";
+
 export { resolveMaxCycles, summarizePrompt, truncate } from "./params.js";

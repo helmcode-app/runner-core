@@ -1,6 +1,14 @@
-/** Shared domain types for the HelmCode runner-core engine. */
+/**
+ * Shared domain types for the HelmCode runner-core engine.
+ *
+ * Grouped by surface: task lifecycle, agent JSON-RPC, open-core HTTP, JSON-RPC primitives.
+ */
+
+// ── Runtime ──────────────────────────────────────────────────────────────
 
 export type HelmMode = "open-core" | "commercial-saas";
+
+// ── Task lifecycle ───────────────────────────────────────────────────────
 
 export type TaskStatus =
   | "queued"
@@ -122,6 +130,8 @@ export interface TaskProgressEvent {
 
 export type ProgressCallback = (event: TaskProgressEvent) => void;
 
+// ── Agent WebSocket JSON-RPC ─────────────────────────────────────────────
+
 /**
  * JSON-RPC `agent/run` params from iPad / open-core WebSocket clients.
  */
@@ -171,6 +181,8 @@ export interface AgentTaskSnapshot {
   active: boolean;
 }
 
+// ── JSON-RPC primitives ──────────────────────────────────────────────────
+
 /** JSON-RPC 2.0 primitives for commercial-saas gateway control. */
 export interface JsonRpcRequest<T = unknown> {
   jsonrpc: "2.0";
@@ -196,6 +208,8 @@ export interface JsonRpcError {
 }
 
 export type JsonRpcResponse<T = unknown> = JsonRpcSuccess<T> | JsonRpcError;
+
+// ── Open-core HTTP ───────────────────────────────────────────────────────
 
 export interface OpenCoreSubmitBody {
   prompt: string;

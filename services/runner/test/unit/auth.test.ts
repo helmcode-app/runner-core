@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { describe, it } from "node:test";
-import { authorize } from "../../src/http/index.js";
+import {
+  authorize,
+  authorizeWebSocketUpgrade,
+} from "../../src/http/index.js";
 
 function req(authorization?: string): IncomingMessage {
   return { headers: authorization ? { authorization } : {} } as IncomingMessage;
@@ -21,5 +24,25 @@ describe("authorize", () => {
 
   it("accepts matching bearer token", () => {
     assert.equal(authorize(req("Bearer secret"), "secret"), true);
+  });
+});
+
+describe("authorizeWebSocketUpgrade", () => {
+  it("accepts query token when header missing", () => {
+    const url = new URL("http://x/v1/agent?token=secret");
+    assert.equal(
+      authorizeWebSocketUpgrade(req(), "secret", url, { allowQueryToken: true }),
+      true,
+    );
+  });
+
+  it("can disable query token", () => {
+    const url = new URL("http://x/v1/agent?token=secret");
+    assert.equal(
+      authorizeWebSocketUpgrade(req(), "secret", url, {
+        allowQueryToken: false,
+      }),
+      false,
+    );
   });
 });

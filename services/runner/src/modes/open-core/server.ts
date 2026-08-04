@@ -5,9 +5,13 @@ import {
   type AgentGateway,
 } from "../../agent/index.js";
 import type { AppConfig } from "../../config.js";
-import type { Logger } from "../../logger.js";
-import type { TaskProgressEvent } from "../../types.js";
 import { sendJson } from "../../http/index.js";
+import type { Logger } from "../../logger.js";
+import {
+  createTerminalGateway,
+  type TerminalGateway,
+} from "../../terminal/index.js";
+import type { TaskProgressEvent } from "../../types.js";
 import {
   createVfsGateway,
   type VfsGateway,
@@ -23,6 +27,7 @@ export interface OpenCoreServer {
   agent: AgentPipeline;
   agentGateway: AgentGateway;
   vfs: VfsGateway;
+  terminal: TerminalGateway;
   close(): Promise<void>;
 }
 
@@ -33,9 +38,10 @@ export interface StartOpenCoreOptions {
 /**
  * Standalone HTTP + WebSocket API for iPad / local clients (HELM_MODE=open-core).
  *
- * WebSocket endpoints:
- * - `/v1/vfs`  — VFS JSON-RPC (file tree / read_chunk / write)
- * - `/v1/agent` — Agent JSON-RPC (`agent/run`, cancel, status)
+ * Unified ingress (same host/port):
+ * - `/v1/vfs`       — VFS JSON-RPC
+ * - `/v1/agent`     — Agent JSON-RPC
+ * - `/v1/terminal`  — WebSSH (in-process PTY); alias `/api/v1/terminal/ws`
  */
 export async function startOpenCore(
   config: AppConfig,
@@ -55,22 +61,17 @@ export async function startOpenCore(
     log.info("open-core API auth enabled (Bearer token)");
   }
 
-  // Progress sinks: task store + live agent WebSocket fan-out (bound after gateway).
-  let agentGatewayRef: AgentGateway | null = null;
+  // Progress: persist in task store + fan-out on agent WebSocket (bound after gateway).
+  const progressSinks: Array<(event: TaskProgressEvent) => void> = [
+    (event) => store.onProgress(event),
+  ];
   const onProgress = (event: TaskProgressEvent): void => {
-    store.onProgress(event);
-    agentGatewayRef?.broadcastProgress(event);
+    for (const sink of progressSinks) sink(event);
   };
 
-  const agent = new AgentPipeline({
-    config,
-    logger,
-    onProgress,
-  });
+  const agent = new AgentPipeline({ config, logger, onProgress });
 
-  const vfsHolder: { current: VfsGateway } = {
-    current: { bridge: null, close: async () => undefined },
-  };
+  let vfs: VfsGateway = { bridge: null, close: async () => undefined };
 
   const server = createServer(async (req, res) => {
     try {
@@ -79,7 +80,7 @@ export async function startOpenCore(
         agent,
         store,
         apiToken,
-        getBridge: () => vfsHolder.current.bridge,
+        getBridge: () => vfs.bridge,
       });
     } catch (err) {
       log.error("unhandled request error", {
@@ -91,17 +92,16 @@ export async function startOpenCore(
     }
   });
 
-  // VFS WS gateway (/v1/vfs)
-  vfsHolder.current = await createVfsGateway(server, config, logger);
-
-  // Agent WS gateway (/v1/agent) — shares the same HelmCodeAgentEngine.
+  // WebSocket gateways share the HTTP server (no extra ports).
+  vfs = await createVfsGateway(server, config, logger);
   const agentGateway = createAgentGateway(
     server,
     agent.underlying,
     config,
     logger,
   );
-  agentGatewayRef = agentGateway;
+  progressSinks.push((event) => agentGateway.broadcastProgress(event));
+  const terminal = createTerminalGateway(server, config, logger);
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -118,13 +118,15 @@ export async function startOpenCore(
   log.info("open-core listening", {
     host: config.HOST,
     port,
-    vfs: Boolean(vfsHolder.current.bridge),
+    vfs: Boolean(vfs.bridge),
     agentWs: "/v1/agent",
+    terminalWs: terminal.enabled ? "/v1/terminal" : "disabled",
   });
 
   const close = async (): Promise<void> => {
+    await terminal.close();
     await agentGateway.close();
-    await vfsHolder.current.close();
+    await vfs.close();
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
@@ -150,7 +152,8 @@ export async function startOpenCore(
     baseUrl: `http://${host}:${port}`,
     agent,
     agentGateway,
-    vfs: vfsHolder.current,
+    vfs,
+    terminal,
     close,
   };
 }

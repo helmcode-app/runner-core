@@ -10,6 +10,7 @@ export {
   attachVfsWebSocket,
   createVfsGateway,
   startVfsBridge,
+  VFS_WS_PATH,
   type VfsGateway,
 } from "./gateway.js";
 export { handleVfsHttp, type VfsHttpContext } from "./http.js";

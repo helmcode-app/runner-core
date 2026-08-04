@@ -1,18 +1,20 @@
-import type { IncomingMessage, Server } from "node:http";
-import type { Duplex } from "node:stream";
+import type { Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AppConfig } from "../config.js";
+import {
+  attachAuthenticatedUpgrade,
+  closeWebSockets,
+} from "../http/index.js";
 import type { Logger } from "../logger.js";
-import { authorize } from "../http/index.js";
 import { VfsBridge } from "./bridge.js";
 import { JsonRpcCode, VfsMethod } from "./protocol.js";
+
+export const VFS_WS_PATH = "/v1/vfs";
 
 export interface VfsGateway {
   bridge: VfsBridge | null;
   close(): Promise<void>;
 }
-
-const WS_PATH = "/v1/vfs";
 
 /** Start the helm-vfs child process (no WebSocket yet). */
 export async function startVfsBridge(
@@ -81,27 +83,11 @@ export function attachVfsWebSocket(
   };
   bridge.on("didChange", onDidChange);
 
-  const onUpgrade = (
-    req: IncomingMessage,
-    socket: Duplex,
-    head: Buffer,
-  ): void => {
-    const host = req.headers.host ?? "localhost";
-    const url = new URL(req.url ?? "/", `http://${host}`);
-    if (url.pathname !== WS_PATH) {
-      return;
-    }
-    if (!authorize(req, apiToken)) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
-  };
-
-  server.on("upgrade", onUpgrade);
+  const onUpgrade = attachAuthenticatedUpgrade(server, {
+    path: VFS_WS_PATH,
+    wss,
+    apiToken,
+  });
 
   wss.on("connection", (ws: WebSocket) => {
     sockets.add(ws);
@@ -121,7 +107,7 @@ export function attachVfsWebSocket(
     close: async () => {
       bridge.off("didChange", onDidChange);
       server.off("upgrade", onUpgrade);
-      for (const ws of sockets) ws.close();
+      closeWebSockets(sockets);
       sockets.clear();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },

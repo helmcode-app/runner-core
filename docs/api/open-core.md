@@ -35,6 +35,7 @@ Shared schemas: [shared-types.md](./shared-types.md). VFS WebSocket: [vfs.md](./
 |------|------|-------------|
 | `/v1/agent` | yes* | Agent JSON-RPC (`agent/run`, `agent/cancel`, `agent/status`, `agent/list`) |
 | `/v1/vfs` | yes* | VFS JSON-RPC (file tree / chunked read / write) |
+| `/v1/terminal` | yes* | WebSSH (in-process PTY). Alias: `/api/v1/terminal/ws`. See [terminal.md](./terminal.md). |
 
 \* Required only when `OPENCORE_API_TOKEN` is configured. Missing/invalid token → `401 {"error":"unauthorized"}`.
 

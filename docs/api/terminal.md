@@ -99,6 +99,34 @@ Optional (prefer binary for input):
 | `TERMINAL_MAX_SESSIONS` | `8` | Concurrent PTY sessions per process |
 | `TERMINAL_HEARTBEAT_MS` | `25000` | Heartbeat interval; `0` disables |
 
+### Color defaults (PTY env)
+
+Interactive shells get:
+
+| Variable | Value | Purpose |
+|----------|--------|---------|
+| `TERM` | `xterm-256color` | 256-color capable terminal |
+| `COLORTERM` | `truecolor` | 24-bit color for modern CLIs |
+| `CLICOLOR` / `CLICOLOR_FORCE` | `1` | BSD / macOS `ls` color |
+| `FORCE_COLOR` | `1` | chalk / npm / many Node & Python tools |
+
+GNU `ls` is aliased to `ls --color=auto` via the WebSSH interactive rc (see below).
+
+### Interactive aliases (bash / zsh)
+
+WebSSH sessions load a small Helm rc (`shell-init.ts` → temp `helm-terminal.rc`):
+
+| Alias | Expansion |
+|-------|-----------|
+| `ls` | `ls --color=auto` (or BSD `ls -G`) |
+| `ll` / `la` / `l` | long / almost-all / classify listings |
+| `grep` / `egrep` / `fgrep` | `--color=auto` when supported |
+| `..` `...` | `cd` up |
+| `g` `gs` `gd` `ga` `gc` `gl` `gp` `gco` `gb` | common git shortcuts |
+| `c` / `h` | `clear` / `history` |
+
+The rc soft-sources `/etc/bash.bashrc` and `~/.bashrc` first so image/user customizations still apply.
+
 ### Requirements
 
 1. Set `TERMINAL_ENABLED=true`

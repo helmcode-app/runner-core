@@ -8,11 +8,8 @@ import type {
   ProgressCallback,
   TestAttempt,
 } from "../types.js";
-import {
-  isTaskAbortedError,
-  TaskAbortedError,
-  throwIfAborted,
-} from "../util/errors.js";
+import { TaskAbortedError, throwIfAborted } from "../util/errors.js";
+import { resolveGithubToken } from "../util/github-token.js";
 import { ContextBuilder } from "./contextBuilder.js";
 import {
   createAgentMemory,
@@ -20,7 +17,6 @@ import {
   type AgentMemory,
 } from "./events.js";
 import { branchNameForTask, GitOrchestrator } from "./git.js";
-import { resolveGithubToken } from "../util/github-token.js";
 import { runTestAndHeal } from "./heal-loop.js";
 import { LlmClient } from "./llm.js";
 import { invokeLlmAndApplyPatches } from "./llm-apply.js";
@@ -30,6 +26,11 @@ import {
   summarizePrompt,
 } from "./params.js";
 import { DEFAULT_MAX_CYCLES, SELF_HEALING_PROMPT_TEMPLATE } from "./prompts.js";
+import {
+  buildErrorResult,
+  buildSuccessResult,
+} from "./result-builder.js";
+import { beginTaskControl } from "./task-control.js";
 import { detectTestCommand } from "./test-runner.js";
 
 export type { AgentMemory } from "./events.js";
@@ -49,8 +50,6 @@ export interface HelmCodeAgentEngineOptions {
  *
  * Pipeline: worktree → ContextBuilder → LLM structured patches →
  * recursive runTestAndHeal (max 3) → auto-commit → push aero-agent/<taskId>.
- *
- * Accepts JSON-RPC `agent/run` params from the iPad WebSocket path.
  */
 export class HelmCodeAgentEngine {
   private readonly git: GitOrchestrator;
@@ -138,7 +137,11 @@ export class HelmCodeAgentEngine {
     const mem = createAgentMemory(task.id, branch, startedAt.toISOString());
     this.memory.set(task.id, mem);
 
-    const { signal, clearTimeoutBudget } = this.beginTaskControl(task);
+    const { signal, clearTimeoutBudget } = beginTaskControl(
+      task,
+      config,
+      this.controllers,
+    );
     this.active.add(task.id);
 
     this.emit(mem, {
@@ -277,9 +280,8 @@ export class HelmCodeAgentEngine {
         ...(token !== undefined ? { token } : {}),
       });
 
-      const result = this.finishResult({
+      const result = buildSuccessResult({
         task,
-        status: "succeeded",
         branch,
         worktreePath,
         ...(commitSha !== undefined ? { commitSha } : {}),
@@ -307,7 +309,7 @@ export class HelmCodeAgentEngine {
       mem.liveStatus = "succeeded";
       return result;
     } catch (err) {
-      const result = this.finishError({
+      const result = buildErrorResult({
         err,
         task,
         branch,
@@ -317,6 +319,10 @@ export class HelmCodeAgentEngine {
         startedAt,
         startedMs,
         mem,
+        log: this.log,
+        ...(this.onProgress !== undefined
+          ? { onProgress: this.onProgress }
+          : {}),
       });
       mem.result = result;
       mem.liveStatus = result.status;
@@ -347,133 +353,5 @@ export class HelmCodeAgentEngine {
     event: Parameters<typeof pushAgentEvent>[1],
   ): void {
     pushAgentEvent(mem, event, this.log, this.onProgress);
-  }
-
-  private beginTaskControl(task: AgentTask): {
-    signal: AbortSignal;
-    clearTimeoutBudget: () => void;
-  } {
-    const controller = new AbortController();
-    this.controllers.set(task.id, controller);
-    const config = this.opts.config;
-
-    const budgetMs =
-      task.timeoutMs !== undefined
-        ? task.timeoutMs
-        : config.TASK_TIMEOUT_MS > 0
-          ? config.TASK_TIMEOUT_MS
-          : undefined;
-
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    if (budgetMs !== undefined && budgetMs > 0) {
-      timeoutHandle = setTimeout(() => {
-        if (!controller.signal.aborted) {
-          controller.abort(
-            new TaskAbortedError(
-              "timeout",
-              `task timed out after ${budgetMs}ms`,
-            ),
-          );
-        }
-      }, budgetMs);
-      timeoutHandle.unref?.();
-    }
-
-    return {
-      signal: controller.signal,
-      clearTimeoutBudget: () => {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-      },
-    };
-  }
-
-  private finishResult(args: {
-    task: AgentTask;
-    status: Extract<AgentResult["status"], "succeeded">;
-    branch: string;
-    worktreePath: string;
-    commitSha?: string;
-    pushRemote: string;
-    testAttempts: TestAttempt[];
-    summary: string;
-    startedAt: Date;
-    startedMs: number;
-  }): AgentResult {
-    return {
-      taskId: args.task.id,
-      status: args.status,
-      branch: args.branch,
-      worktreePath: args.worktreePath,
-      ...(args.commitSha !== undefined ? { commitSha: args.commitSha } : {}),
-      pushRemote: args.pushRemote,
-      testAttempts: args.testAttempts,
-      summary: args.summary,
-      startedAt: args.startedAt.toISOString(),
-      finishedAt: new Date().toISOString(),
-      durationMs: Date.now() - args.startedMs,
-    };
-  }
-
-  private finishError(args: {
-    err: unknown;
-    task: AgentTask;
-    branch: string;
-    worktreePath: string;
-    commitSha?: string;
-    testAttempts: TestAttempt[];
-    startedAt: Date;
-    startedMs: number;
-    mem: AgentMemory;
-  }): AgentResult {
-    const base = {
-      taskId: args.task.id,
-      branch: args.branch || branchNameForTask(args.task.id),
-      worktreePath: args.worktreePath || "",
-      ...(args.commitSha !== undefined ? { commitSha: args.commitSha } : {}),
-      testAttempts: args.testAttempts,
-      startedAt: args.startedAt.toISOString(),
-      finishedAt: new Date().toISOString(),
-      durationMs: Date.now() - args.startedMs,
-    };
-
-    if (isTaskAbortedError(args.err)) {
-      this.log.warn("task aborted", {
-        taskId: args.task.id,
-        code: args.err.code,
-        error: args.err.message,
-      });
-      this.emit(args.mem, {
-        taskId: args.task.id,
-        status: "cancelled",
-        stage: "cancelled",
-        message: args.err.message,
-        at: new Date().toISOString(),
-        detail: { code: args.err.code },
-      });
-      return {
-        ...base,
-        status: "cancelled",
-        summary:
-          args.err.code === "timeout" ? "task timed out" : "task cancelled",
-        error: args.err.message,
-      };
-    }
-
-    const message =
-      args.err instanceof Error ? args.err.message : String(args.err);
-    this.log.error("task failed", { taskId: args.task.id, error: message });
-    this.emit(args.mem, {
-      taskId: args.task.id,
-      status: "failed",
-      stage: "failed",
-      message,
-      at: new Date().toISOString(),
-    });
-    return {
-      ...base,
-      status: "failed",
-      summary: "task failed",
-      error: message,
-    };
   }
 }

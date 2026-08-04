@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { HelmCodeAgentEngine } from "../../src/agent/agentEngine.js";
-import { AgentControllerRouter, AgentMethod } from "../../src/agent/agentRouter.js";
+import { HelmCodeAgentEngine } from "../../src/agent/engine.js";
+import { AgentControllerRouter, AgentMethod } from "../../src/agent/router.js";
 import { runCommandOrThrow } from "../../src/util/process.js";
 import {
   createLocalGitFixture,

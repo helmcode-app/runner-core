@@ -8,7 +8,7 @@ import type {
 import {
   HelmCodeAgentEngine,
   type HelmCodeAgentEngineOptions,
-} from "./agentEngine.js";
+} from "./engine.js";
 
 export interface AgentOptions {
   config: AppConfig;

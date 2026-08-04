@@ -1,10 +1,16 @@
 /**
- * Agent orchestration: git worktrees, LLM patches, self-healing tests, push.
+ * Agent orchestration package.
  *
  * ```
- * agentEngine  →  heal-loop / llm-apply / contextBuilder
- * agentRouter  →  agentWs  (/v1/agent)
- * pipeline     →  HTTP + commercial-saas façade
+ * engine.ts       HelmCodeAgentEngine (orchestrator)
+ * heal-loop.ts    recursive test + self-heal
+ * llm-apply.ts    LLM → patches → disk
+ * contextBuilder  contextPaths-only loader
+ * router.ts       JSON-RPC controller
+ * ws.ts           WebSocket /v1/agent
+ * pipeline.ts     HTTP / SaaS façade
+ * protocol.ts     method names + RPC helpers
+ * parse-run.ts    agent/run param validation
  * ```
  */
 
@@ -15,7 +21,7 @@ export {
   SELF_HEALING_PROMPT_TEMPLATE,
   type HelmCodeAgentEngineOptions,
   type AgentMemory,
-} from "./agentEngine.js";
+} from "./engine.js";
 
 export {
   ContextBuilder,
@@ -28,17 +34,18 @@ export {
   AgentMethod,
   AgentJsonRpcCode,
   parseAgentRunParams,
+  extractTaskId,
   type AgentMethodName,
   type AgentRouterOptions,
   type AgentNotifyFn,
-} from "./agentRouter.js";
+} from "./router.js";
 
 export {
   createAgentGateway,
   attachAgentWebSocket,
   AGENT_WS_PATH,
   type AgentGateway,
-} from "./agentWs.js";
+} from "./ws.js";
 
 export { AgentPipeline, type AgentOptions } from "./pipeline.js";
 

@@ -13,70 +13,58 @@ Node.js agent orchestration daemon for HelmCode.
 
 ```
 src/
-├── entrypoint.ts              # boot → modes/startMode
-├── config.ts                  # zod env (grouped; envBool helper)
+├── entrypoint.ts
+├── config.ts                  # zod env (grouped; envBool)
 ├── logger.ts
-├── types.ts                   # shared domain types
-├── agent/                     # orchestration core
-│   ├── agentEngine.ts         # HelmCodeAgentEngine
-│   ├── heal-loop.ts           # recursive runTestAndHeal
-│   ├── llm-apply.ts           # LLM → patches → disk
-│   ├── contextBuilder.ts      # contextPaths-only loader
+├── types.ts
+├── agent/
+│   ├── engine.ts              # HelmCodeAgentEngine
+│   ├── task-control.ts        # abort + timeout budget
+│   ├── result-builder.ts      # success / fail / cancel results
+│   ├── heal-loop.ts           # runTestAndHeal
+│   ├── llm-apply.ts
+│   ├── contextBuilder.ts
 │   ├── params.ts / prompts.ts / events.ts
-│   ├── agentRouter.ts         # JSON-RPC agent/* controller
-│   ├── agentWs.ts             # WebSocket /v1/agent
-│   ├── pipeline.ts            # façade for HTTP / SaaS
+│   ├── protocol.ts            # agent/* methods + RPC helpers
+│   ├── parse-run.ts           # agent/run param validation
+│   ├── router.ts              # JSON-RPC controller
+│   ├── ws.ts                  # WebSocket /v1/agent
+│   ├── pipeline.ts            # HTTP / SaaS façade
 │   ├── git.ts / llm.ts / patch.ts / test-runner.ts
 │   └── index.ts
 ├── http/                      # auth, JSON, shared WS upgrade
-│   ├── auth.ts                # Bearer + WS query token
-│   ├── ws-upgrade.ts          # attachAuthenticatedUpgrade
-│   └── json.ts
 ├── modes/
-│   ├── open-core/
-│   │   ├── server.ts          # listen + mount gateways
-│   │   ├── routes.ts
-│   │   └── task-store.ts
+│   ├── open-core/             # server + routes + task-store
 │   └── commercial-saas/
 ├── terminal/                  # WebSSH: WS ↔ in-process PTY
-├── vfs/                       # helm-vfs bridge + WS gateway
-└── util/                      # process, fs, errors, github-token, env
+├── vfs/                       # helm-vfs bridge + WS
+└── util/
 ```
 
-## Unified ingress (open-core)
-
-Same host/port for all surfaces:
+## Unified ingress
 
 | Path | Protocol |
 |------|----------|
 | `/health`, `/v1/tasks`, … | HTTP |
 | `/v1/vfs` | WebSocket JSON-RPC |
 | `/v1/agent` | WebSocket JSON-RPC |
-| `/v1/terminal` (+ `/api/v1/terminal/ws`) | WebSocket binary + control JSON |
+| `/v1/terminal` | WebSocket binary + control JSON |
 
-Auth: `OPENCORE_API_TOKEN` as `Authorization: Bearer` or Upgrade `?token=`.
+Auth: `OPENCORE_API_TOKEN` as Bearer or Upgrade `?token=`.
 
 ## Agent pipeline
 
 ```
-agent/run
-  → git fetch + worktree aero-agent/<taskId>
-  → ContextBuilder(contextPaths only)
-  → LLM structured full-file patches
-  → detect/run testCommand (self-heal ≤ maxCycles)
-  → git commit + push
-  → cleanup worktree
+agent/run → worktree → contextPaths → LLM patches → test/heal → commit/push
 ```
 
 | Credential | Purpose |
 |------------|---------|
-| `OPENCORE_API_TOKEN` | HTTP + all WebSockets |
-| `GITHUB_TOKEN` / `agent/run.githubToken` | git fetch / push |
+| `OPENCORE_API_TOKEN` | HTTP + WebSockets |
+| `GITHUB_TOKEN` / `githubToken` | git fetch / push |
 | `LLM_API_KEY` | chat completions |
 
 ## Develop
-
-From **repo root**:
 
 ```bash
 npm ci
@@ -90,13 +78,16 @@ npm run dev
 
 | Change | Where |
 |--------|--------|
-| Orchestration / cancel / timeout | `agent/agentEngine.ts` |
+| Orchestration steps | `agent/engine.ts` |
+| Cancel / timeout | `agent/task-control.ts` |
+| Result envelopes | `agent/result-builder.ts` |
 | Self-heal | `agent/heal-loop.ts` |
 | LLM patches | `agent/llm-apply.ts`, `llm.ts`, `patch.ts` |
-| Context loading | `agent/contextBuilder.ts` |
-| Agent WS methods | `agent/agentRouter.ts`, `agentWs.ts` |
-| Shared WS auth / upgrade | `http/auth.ts`, `http/ws-upgrade.ts` |
-| Terminal PTY | `terminal/` |
+| RPC methods / codes | `agent/protocol.ts`, `router.ts` |
+| `agent/run` params | `agent/parse-run.ts` |
+| Agent WebSocket | `agent/ws.ts` |
+| Shared WS upgrade | `http/ws-upgrade.ts` |
+| Terminal | `terminal/` |
 | VFS | `vfs/` + Go `services/vfs` |
 | HTTP routes | `modes/open-core/routes.ts` |
-| Env vars | `config.ts` |
+| Env | `config.ts` |

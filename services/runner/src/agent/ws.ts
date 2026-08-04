@@ -7,11 +7,9 @@ import {
 } from "../http/index.js";
 import type { Logger } from "../logger.js";
 import type { JsonRpcRequest, TaskProgressEvent } from "../types.js";
-import type { HelmCodeAgentEngine } from "./agentEngine.js";
-import {
-  AgentControllerRouter,
-  AgentJsonRpcCode,
-} from "./agentRouter.js";
+import type { HelmCodeAgentEngine } from "./engine.js";
+import { AgentJsonRpcCode, AgentMethod } from "./protocol.js";
+import { AgentControllerRouter } from "./router.js";
 
 export const AGENT_WS_PATH = "/v1/agent";
 
@@ -44,7 +42,7 @@ export function createAgentGateway(
   const broadcastProgress = (event: TaskProgressEvent): void => {
     const note = JSON.stringify({
       jsonrpc: "2.0",
-      method: "agent/progress",
+      method: AgentMethod.Progress,
       params: event,
     });
     for (const ws of sockets) {

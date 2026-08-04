@@ -5,6 +5,7 @@
 import { accessSync, constants as fsConstants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import * as pty from "node-pty";
+import { applyHelmShellInit } from "./shell-init.js";
 
 export interface LocalPtyOptions {
   shell: string;
@@ -95,28 +96,36 @@ export function spawnLocalPty(opts: LocalPtyOptions): LocalPty {
   const picked = pickAvailableShell(opts.shell);
   const sessionId = randomUUID();
 
-  const env: Record<string, string> = {
+  // Color-friendly defaults for interactive WebSSH (xterm.js client).
+  // Callers may still override via opts.env.
+  const baseEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
+    CLICOLOR: "1",
+    CLICOLOR_FORCE: "1",
+    FORCE_COLOR: "1",
     HELM_TERMINAL: "1",
     ...opts.env,
   };
 
   // Avoid leaking parent interactive flags that confuse shells.
-  delete env.npm_config_argv;
+  delete baseEnv.npm_config_argv;
 
-  const term = pty.spawn(picked.file, picked.args, {
+  // Inject common aliases (ls --color, git shortcuts, …) for bash/zsh.
+  const launched = applyHelmShellInit(picked.file, picked.args, baseEnv);
+
+  const term = pty.spawn(launched.file, launched.args, {
     name: "xterm-256color",
     cols: Math.max(1, opts.cols),
     rows: Math.max(1, opts.rows),
     cwd: opts.cwd,
-    env,
+    env: launched.env,
   });
 
   return {
     sessionId,
-    shell: picked.display,
+    shell: launched.display,
     cwd: opts.cwd,
     write(data) {
       if (typeof data === "string") term.write(data);

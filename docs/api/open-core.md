@@ -10,7 +10,7 @@ Standalone monolithic HTTP + WebSocket API for local / iPad clients.
 | Auth | Optional Bearer (`OPENCORE_API_TOKEN`). When set, all routes **except** `GET /health` require `Authorization: Bearer <token>`. When unset, API is open (dev only). |
 | Body size limit | 2 MiB |
 | Implementation | `services/runner/src/modes/open-core/` |
-| Agent engine | `HelmCodeAgentEngine` (`services/runner/src/agent/agentEngine.ts`) |
+| Agent engine | `HelmCodeAgentEngine` (`services/runner/src/agent/engine.ts`) |
 
 Shared schemas: [shared-types.md](./shared-types.md). VFS WebSocket: [vfs.md](./vfs.md).
 

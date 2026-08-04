@@ -5,8 +5,8 @@ import {
   AgentJsonRpcCode,
   AgentMethod,
   parseAgentRunParams,
-} from "../../src/agent/agentRouter.js";
-import { HelmCodeAgentEngine } from "../../src/agent/agentEngine.js";
+} from "../../src/agent/router.js";
+import { HelmCodeAgentEngine } from "../../src/agent/engine.js";
 import { testConfig, testLogger } from "../helpers.js";
 
 describe("parseAgentRunParams", () => {

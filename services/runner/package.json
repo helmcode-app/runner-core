@@ -1,7 +1,7 @@
 {
   "name": "@helmcode/runner",
   "version": "0.1.0",
-  "description": "HelmCode agent orchestration daemon (open-core / commercial-saas) — Node.js service.",
+  "description": "HelmCode open-core daemon — agent sessions (OpenCode), VFS, terminal.",
   "license": "MIT",
   "private": true,
   "type": "module",

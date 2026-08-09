@@ -58,7 +58,6 @@ else
   echo "[smoke-init] using existing repo at $MAIN_REPO_PATH"
 fi
 
-export GITHUB_TOKEN="${GITHUB_TOKEN:-smoke-local-token}"
 export HELM_MODE="${HELM_MODE:-open-core}"
 export MAIN_REPO_PATH
 export WORKSPACES_PATH

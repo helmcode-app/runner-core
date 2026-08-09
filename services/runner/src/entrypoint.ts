@@ -2,8 +2,7 @@
 /**
  * Unified entrypoint for HelmCode runner-core.
  *
- * HELM_MODE=open-core        → standalone HTTP API on :8080 (iPad / local)
- * HELM_MODE=commercial-saas  → headless JSON-RPC worker under commercial gateway
+ * HELM_MODE=open-core → HTTP + WebSocket API (sessions / VFS / terminal)
  */
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
@@ -18,6 +17,8 @@ async function main(): Promise<void> {
     node: process.version,
     mainRepo: config.MAIN_REPO_PATH,
     workspaces: config.WORKSPACES_PATH,
+    sessions: config.OPENCODE_ENABLED,
+    sessionsManaged: config.OPENCODE_MANAGED,
   });
 
   await startMode(config, logger);

@@ -1,18 +1,18 @@
 # runner-core documentation
 
-API contracts and shared schemas for the HelmCode headless agent orchestration engine.
+API contracts for the HelmCode open-core daemon.
 
 | Document | Description |
 |----------|-------------|
 | [Open-core HTTP API](./api/open-core.md) | Standalone server on `:8080` (`HELM_MODE=open-core`) |
-| [Commercial SaaS JSON-RPC](./api/commercial-saas.md) | Outbound gateway control plane (`HELM_MODE=commercial-saas`) |
-| [Shared types](./api/shared-types.md) | `AgentResult`, `TaskProgressEvent`, enums, error shapes |
+| [Agent sessions](./api/sessions.md) | Product `/v1/sessions/*` (backend-agnostic) |
+| [OpenCode adapter](./api/opencode.md) | Internal runtime notes (not a public API) |
 | [VFS protocol](./api/vfs.md) | Go `helm-vfs` JSON-RPC + WebSocket `/v1/vfs` |
-| [Terminal WebSSH](./api/terminal.md) | In-process PTY over `WS /v1/terminal` (unified ingress) |
+| [Terminal WebSSH](./api/terminal.md) | In-process PTY over `WS /v1/terminal` |
+| [Testing in Docker](./testing-docker.md) | Docker-only test / smoke |
 
 Source of truth for runtime behavior:
 
-- Node: `services/runner/src/` (agent, vfs, **terminal**)
+- Node: `services/runner/src/` (sessions, opencode, vfs, terminal)
 - Go VFS: `services/vfs/`
 - Go WebSSH sidecar (optional): `services/webssh/`
-- iPad xterm client: HelmCode `Features/Editor/Terminal/`

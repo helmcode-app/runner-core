@@ -4,12 +4,14 @@
 #   1. REQUIRED — set a real host git checkout (absolute path):
 #        export HOST_REPO=/Users/you/Developer/src/github.com/org/my-repo
 #      or put HOST_REPO=... in runner-core/.env
-#   2. Start:
+#   2. Optional secrets / overrides in runner-core/.env (auto-loaded if present):
+#        OPENCODE_API_KEY (required for managed sessions), OPENCORE_API_TOKEN, …
+#   3. Start:
 #        docker compose -f compose.yaml -f compose.dev.yaml up --build dev
-#   3. Probe:
+#   4. Probe:
 #        curl -s http://127.0.0.1:18080/health | jq .
 #        curl -s http://127.0.0.1:18080/v1/vfs/status | jq .
-#   4. iPad / Simulator Base URL:
+#   5. iPad / Simulator Base URL:
 #        http://127.0.0.1:18080          (Simulator)
 #        http://<Mac-LAN-IP>:18080       (physical iPad)
 #
@@ -18,7 +20,9 @@
 #   - HOST_REPO must be a git repo (contains .git).
 #   - One runner instance = one repo (MAIN_REPO_PATH=/app/main_repo).
 #   - Agent worktrees use a separate volume (/app/workspaces), not the host mount.
-#   - Optional: OPENCORE_API_TOKEN, LLM_*, GITHUB_TOKEN via env or a root .env file.
+#   - Compose only pins container-layout + a few dev defaults. Everything else
+#     comes from the image/config.ts defaults or from .env (see env_file).
+#   - Agent sessions: OPENCODE_ENABLED=true in .env (MANAGED defaults on below).
 #   - Stop: docker compose -f compose.yaml -f compose.dev.yaml down
 
 services:
@@ -28,34 +32,31 @@ services:
       target: smoke
     ports:
       - "${DEV_PORT:-18080}:8080"
+    # Pass through root .env without re-listing every key in `environment`.
+    # Keys also listed under `environment` below win on conflict.
+    env_file:
+      - path: .env
+        required: false
     environment:
+      # ── Fixed for this compose layout (not optional) ──────────
       HELM_MODE: open-core
       HOST: 0.0.0.0
       PORT: "8080"
-      LOG_LEVEL: ${LOG_LEVEL:-info}
       VFS_ENABLED: "true"
       MAIN_REPO_PATH: /app/main_repo
       WORKSPACES_PATH: /app/workspaces
-      # Optional IDE label (else derived from git origin, else basename main_repo):
-      # VFS_PROJECT_NAME: my-app
-      VFS_PROJECT_NAME: ${VFS_PROJECT_NAME:-}
-      # Leave empty for unauthenticated local testing (match iPad Open Project token if set).
-      OPENCORE_API_TOKEN: ${OPENCORE_API_TOKEN:-}
-      # Real GitHub PAT for fetch/push only. Empty default — never use a fake token.
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-local-dev-token}
-      # LLM_* must be valid strings (empty "" fails Zod — defaults only apply when unset).
-      # Without LLM_API_KEY the agent applies no patches; VFS / health still work.
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
-      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
-      GIT_USER_NAME: ${GIT_USER_NAME:-HelmCode Agent}
-      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-agent@helmcode.app}
-      DEFAULT_BASE_BRANCH: ${DEFAULT_BASE_BRANCH:-main}
-      # WebSSH — in-process PTY (node-pty). No docker.sock required.
+
+      # ── Dev defaults that differ from config.ts / image ───────
+      # Terminal on for iPad WebSSH; code default is false (quiet tests).
       TERMINAL_ENABLED: ${TERMINAL_ENABLED:-true}
-      TERMINAL_SHELL: ${TERMINAL_SHELL:-/bin/bash}
-      TERMINAL_WORKDIR: ${TERMINAL_WORKDIR:-/app/main_repo}
-      TERMINAL_MAX_SESSIONS: ${TERMINAL_MAX_SESSIONS:-8}
+      TERMINAL_WORKDIR: /app/main_repo
+
+      # Sessions: opt-in via OPENCODE_ENABLED; managed install is the
+      # container path (install at boot into the volume below).
+      # Other OPENCODE_* (VERSION, PREFIX, ports, …) use config defaults
+      # unless you set them in .env.
+      OPENCODE_ENABLED: ${OPENCODE_ENABLED:-false}
+      OPENCODE_MANAGED: ${OPENCODE_MANAGED:-true}
     volumes:
       # ------------------------------------------------------------------
       # Repo entrypoint: host path → container MAIN_REPO_PATH
@@ -67,6 +68,8 @@ services:
       - ${HOST_REPO:?Set HOST_REPO to an absolute path of a local git repo}:/app/main_repo
       # Agent worktrees (do not bind-mount over the host repo)
       - dev-workspaces:/app/workspaces
+      # Persist managed OpenCode install across container recreates
+      - dev-opencode:/app/.opencode
     healthcheck:
       test:
         [
@@ -78,7 +81,9 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-      start_period: 15s
+      # Managed OpenCode may npm-install on first boot.
+      start_period: 120s
 
 volumes:
   dev-workspaces:
+  dev-opencode:

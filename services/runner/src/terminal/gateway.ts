@@ -12,7 +12,7 @@ import { spawnLocalPty } from "./local-pty.js";
 import { encodeServerMessage } from "./protocol.js";
 import { TerminalSession } from "./session.js";
 
-/** Unified-ingress WebSSH path (shares open-core host/port with /v1/vfs, /v1/agent). */
+/** Unified-ingress WebSSH path (shares open-core host/port with /v1/vfs). */
 export const TERMINAL_WS_PATH = "/v1/terminal";
 /** Alias matching common reverse-proxy layouts. */
 export const TERMINAL_WS_PATH_ALIAS = "/api/v1/terminal/ws";

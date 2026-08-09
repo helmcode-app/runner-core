@@ -90,8 +90,12 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/helm-vfs ./cmd/hel
 FROM base AS runtime
 WORKDIR /app
 ENV HELM_VFS_BIN=/app/bin/helm-vfs \
-    VFS_ENABLED=true
-RUN mkdir -p /app/main_repo /app/workspaces /app/remote.git /app/bin \
+    VFS_ENABLED=true \
+    OPENCODE_PREFIX=/app/.opencode
+# OpenCode is NOT baked into the image. When OPENCODE_ENABLED+OPENCODE_MANAGED,
+# the runner runs `npm install -g --prefix $OPENCODE_PREFIX opencode-ai@…` at
+# first boot (and on the update interval). Prefix must be writable by `helm`.
+RUN mkdir -p /app/main_repo /app/workspaces /app/remote.git /app/bin /app/.opencode \
     && useradd --system --uid 10001 --home /app --shell /usr/sbin/nologin helm \
     && chown -R helm:helm /app
 COPY --from=build --chown=helm:helm /src/services/runner/package.json /app/package.json
@@ -106,7 +110,8 @@ RUN if [ -d /app/node_modules_runner ] && [ "$(ls -A /app/node_modules_runner 2>
 COPY --from=go-build --chown=helm:helm /out/helm-vfs /app/bin/helm-vfs
 USER helm
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+# Longer start_period: managed OpenCode may npm-install on first boot.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=5 \
   CMD node -e "const m=process.env.HELM_MODE||'open-core'; if(m!=='open-core') process.exit(0); fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["node", "dist/entrypoint.js"]
 
@@ -117,5 +122,4 @@ FROM runtime AS smoke
 USER root
 COPY scripts/docker-smoke-init.sh /app/docker-smoke-init.sh
 RUN chmod +x /app/docker-smoke-init.sh
-ENV GITHUB_TOKEN=smoke-local-token
 ENTRYPOINT ["/app/docker-smoke-init.sh"]

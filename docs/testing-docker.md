@@ -87,20 +87,19 @@ Probe:
 
 ```bash
 curl -s http://127.0.0.1:18080/health | jq
-
-curl -s -X POST http://127.0.0.1:18080/v1/tasks/sync \
-  -H 'content-type: application/json' \
-  -d '{"prompt":"smoke","testCommand":"true"}' | jq
+curl -s http://127.0.0.1:18080/v1/status | jq
+curl -s http://127.0.0.1:18080/v1/vfs/status | jq
 ```
 
-Async path:
+Agent sessions (optional — needs network for managed OpenCode install):
 
 ```bash
-curl -s -X POST http://127.0.0.1:18080/v1/tasks \
-  -H 'content-type: application/json' \
-  -d '{"id":"d1","prompt":"smoke","testCommand":"true"}' | jq
+docker compose run --rm \
+  -e OPENCODE_ENABLED=true \
+  -e OPENCODE_MANAGED=true \
+  -p 18080:8080 smoke
 
-curl -s http://127.0.0.1:18080/v1/tasks/d1 | jq
+curl -s http://127.0.0.1:18080/v1/sessions/health | jq
 ```
 
 Stop and remove containers/volumes:
@@ -113,14 +112,9 @@ docker compose down -v
 
 Notes:
 
-- Default smoke uses a dummy `GITHUB_TOKEN` and a **local** bare remote (no GitHub).
+- Smoke seeds a **local** bare remote + clone (no GitHub).
 - Fixture dirs are Docker volumes; init **clears contents only** (never removes mount points).
-- Without `LLM_API_KEY`, the agent applies no file patches; `testCommand: "true"` still validates the full pipeline.
-- To exercise a real LLM inside smoke:
-
-  ```bash
-  docker compose run --rm -e LLM_API_KEY -e LLM_BASE_URL -e LLM_MODEL -p 18080:8080 smoke
-  ```
+- Default smoke does **not** enable OpenCode; health/VFS still exercise the daemon.
 
 ## 4. What stays off the host
 

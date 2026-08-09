@@ -29,13 +29,6 @@ export function testConfig(overrides: Record<string, string> = {}): AppConfig {
     HOST: "127.0.0.1",
     PORT: "0",
     LOG_LEVEL: "error",
-    MAX_TEST_RETRIES: "3",
-    DEFAULT_BASE_BRANCH: "main",
-    GIT_USER_NAME: "Test Agent",
-    GIT_USER_EMAIL: "test@helmcode.app",
-    // Disable default budget in tests unless overridden.
-    TASK_TIMEOUT_MS: "0",
-    // Agent HTTP tests do not require helm-vfs unless a suite opts in.
     VFS_ENABLED: "false",
     ...overrides,
   });
@@ -43,7 +36,7 @@ export function testConfig(overrides: Record<string, string> = {}): AppConfig {
 
 /**
  * Create a bare remote + working clone with an initial commit on `main`.
- * Returns paths suitable for agent integration tests (local push, no GitHub).
+ * Useful for VFS / integration fixtures that need a real git tree.
  */
 export async function createLocalGitFixture(root: string): Promise<{
   barePath: string;
@@ -90,7 +83,6 @@ export async function createLocalGitFixture(root: string): Promise<{
     cwd: mainRepoPath,
     env: gitEnv,
   });
-  // Ensure origin/main exists for worktree start-point.
   await runCommandOrThrow("git", ["fetch", "origin"], {
     cwd: mainRepoPath,
     env: gitEnv,

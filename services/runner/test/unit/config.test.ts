@@ -4,56 +4,40 @@ import { loadConfig } from "../../src/config.js";
 
 describe("loadConfig", () => {
   it("applies defaults for open-core", () => {
-    const cfg = loadConfig({
-      GIT_USER_EMAIL: "agent@helmcode.app",
-    });
+    const cfg = loadConfig({});
     assert.equal(cfg.mode, "open-core");
     assert.equal(cfg.HELM_MODE, "open-core");
     assert.equal(cfg.PORT, 8080);
     assert.equal(cfg.MAIN_REPO_PATH, "/app/main_repo");
-    assert.equal(cfg.MAX_TEST_RETRIES, 3);
-    assert.equal(cfg.DEFAULT_BASE_BRANCH, "main");
+    assert.equal(cfg.OPENCODE_ENABLED, false);
+    assert.equal(cfg.OPENCODE_MANAGED, false);
+    assert.equal(cfg.VFS_ENABLED, true);
   });
 
   it("parses numeric env coercions", () => {
     const cfg = loadConfig({
       PORT: "9090",
-      MAX_TEST_RETRIES: "5",
-      POLL_INTERVAL_MS: "1500",
-      GIT_USER_EMAIL: "agent@helmcode.app",
+      OPENCODE_SERVE_PORT: "4100",
+      OPENCODE_UPDATE_INTERVAL_HOURS: "12",
     });
     assert.equal(cfg.PORT, 9090);
-    assert.equal(cfg.MAX_TEST_RETRIES, 5);
-    assert.equal(cfg.POLL_INTERVAL_MS, 1500);
+    assert.equal(cfg.OPENCODE_SERVE_PORT, 4100);
+    assert.equal(cfg.OPENCODE_UPDATE_INTERVAL_HOURS, 12);
   });
 
   it("allows ephemeral PORT=0", () => {
-    const cfg = loadConfig({
-      PORT: "0",
-      GIT_USER_EMAIL: "agent@helmcode.app",
-    });
+    const cfg = loadConfig({ PORT: "0" });
     assert.equal(cfg.PORT, 0);
   });
 
-  it("requires GATEWAY_URL in commercial-saas mode", () => {
+  it("rejects commercial-saas mode (removed)", () => {
     assert.throws(
       () =>
         loadConfig({
           HELM_MODE: "commercial-saas",
-          GIT_USER_EMAIL: "agent@helmcode.app",
         }),
-      /GATEWAY_URL is required/,
+      /Invalid environment configuration/,
     );
-  });
-
-  it("accepts commercial-saas with gateway url", () => {
-    const cfg = loadConfig({
-      HELM_MODE: "commercial-saas",
-      GATEWAY_URL: "http://gateway.internal:9000",
-      GIT_USER_EMAIL: "agent@helmcode.app",
-    });
-    assert.equal(cfg.mode, "commercial-saas");
-    assert.equal(cfg.GATEWAY_URL, "http://gateway.internal:9000");
   });
 
   it("rejects invalid LOG_LEVEL", () => {
@@ -61,9 +45,17 @@ describe("loadConfig", () => {
       () =>
         loadConfig({
           LOG_LEVEL: "verbose",
-          GIT_USER_EMAIL: "agent@helmcode.app",
         }),
       /Invalid environment configuration/,
     );
+  });
+
+  it("treats empty strings as unset", () => {
+    const cfg = loadConfig({
+      OPENCORE_API_TOKEN: "",
+      OPENCODE_DEFAULT_MODEL: "",
+    });
+    assert.equal(cfg.OPENCORE_API_TOKEN, undefined);
+    assert.equal(cfg.OPENCODE_DEFAULT_MODEL, undefined);
   });
 });

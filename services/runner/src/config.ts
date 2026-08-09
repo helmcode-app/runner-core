@@ -1,12 +1,12 @@
 import { z } from "zod";
 import type { HelmMode } from "./types.js";
 import { envBool } from "./util/env.js";
-import { isPlaceholderGithubToken } from "./util/github-token.js";
 
-const helmModeSchema = z.enum(["open-core", "commercial-saas"]);
+const helmModeSchema = z.enum(["open-core"]);
 
 const envSchema = z.object({
   // ── Runtime mode ───────────────────────────────────────────
+  /** Only `open-core` is supported (legacy commercial-saas pipeline removed). */
   HELM_MODE: helmModeSchema.default("open-core"),
   MAIN_REPO_PATH: z.string().min(1).default("/app/main_repo"),
   WORKSPACES_PATH: z.string().min(1).default("/app/workspaces"),
@@ -14,32 +14,6 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(8080),
   HOST: z.string().min(1).default("0.0.0.0"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-
-  // ── Commercial SaaS worker ─────────────────────────────────
-  GATEWAY_URL: z.string().url().optional(),
-  GATEWAY_TOKEN: z.string().optional(),
-  WORKER_ID: z.string().optional(),
-  POLL_INTERVAL_MS: z.coerce.number().int().positive().default(2000),
-
-  // ── LLM ────────────────────────────────────────────────────
-  LLM_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
-  LLM_API_KEY: z.string().optional(),
-  LLM_MODEL: z.string().min(1).default("gpt-4o"),
-  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
-
-  // ── Git ────────────────────────────────────────────────────
-  GITHUB_TOKEN: z.string().optional(),
-  GIT_USER_NAME: z.string().min(1).default("HelmCode Agent"),
-  GIT_USER_EMAIL: z.string().email().default("agent@helmcode.app"),
-  DEFAULT_BASE_BRANCH: z.string().min(1).default("main"),
-
-  // ── Agent pipeline ─────────────────────────────────────────
-  MAX_TEST_RETRIES: z.coerce.number().int().min(1).max(10).default(3),
-  /**
-   * Default hard wall-clock budget per agent task (ms).
-   * Overridden per-task via `timeoutMs`. 0 disables the default budget.
-   */
-  TASK_TIMEOUT_MS: z.coerce.number().int().min(0).default(900_000),
 
   // ── Open-core ingress auth ─────────────────────────────────
   /**
@@ -69,6 +43,79 @@ const envSchema = z.object({
   TERMINAL_MAX_SESSIONS: z.coerce.number().int().min(1).max(64).default(8),
   /** App-level heartbeat interval for terminal WS (ms). 0 disables. */
   TERMINAL_HEARTBEAT_MS: z.coerce.number().int().min(0).default(25_000),
+
+  // ── Agent sessions runtime (adapter: OpenCode Server today) ─
+  /**
+   * When true, expose `/v1/sessions/*` via the session runtime adapter.
+   * Default false so unit tests / minimal boots stay quiet.
+   */
+  OPENCODE_ENABLED: envBool(false),
+  /**
+   * When true (and OPENCODE_ENABLED), runner installs/starts `opencode serve`
+   * at process boot and optionally refreshes on an interval.
+   * When false, connect to an external daemon at OPENCODE_BASE_URL.
+   */
+  OPENCODE_MANAGED: envBool(false),
+  /** Session runtime base URL (e.g. `opencode serve` on :4096). */
+  OPENCODE_BASE_URL: z.string().url().default("http://127.0.0.1:4096"),
+  /** Optional Basic auth password matching OPENCODE_SERVER_PASSWORD on the daemon. */
+  OPENCODE_SERVER_PASSWORD: z.string().optional(),
+  /** Basic auth username (default opencode). */
+  OPENCODE_SERVER_USERNAME: z.string().min(1).default("opencode"),
+  /** Non-SSE HTTP timeout to OpenCode (ms). */
+  OPENCODE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /** Default model string for prompts (e.g. opencode/big-pickle). */
+  OPENCODE_DEFAULT_MODEL: z.string().optional(),
+  /**
+   * Provider API key for managed OpenCode (OpenCode Go / Zen / etc.).
+   * Written to `$OPENCODE_HOME/.local/share/opencode/auth.json` before serve starts.
+   * Required when OPENCODE_MANAGED=true. Same path for local and cloud — no host mount.
+   */
+  OPENCODE_API_KEY: z.string().optional(),
+  /**
+   * Provider id stored in auth.json (must match model prefix, e.g. `opencode/...` → `opencode`).
+   */
+  OPENCODE_AUTH_PROVIDER: z.string().min(1).default("opencode"),
+  /**
+   * Home directory used for OpenCode auth/config when managed.
+   * Default: process HOME / os.homedir(). Docker image uses /app for user helm.
+   */
+  OPENCODE_HOME: z.string().optional(),
+  /** OpenCode agent name for mode=agent (default build). */
+  OPENCODE_AGENT_NAME: z.string().optional(),
+  /** OpenCode agent name for mode=plan (default plan). */
+  OPENCODE_PLAN_AGENT: z.string().optional(),
+  /** OpenCode agent name for mode=ask (default ask). */
+  OPENCODE_ASK_AGENT: z.string().optional(),
+  /**
+   * npm dist-tag or semver for managed install (`opencode-ai@…`).
+   * Use `latest` for rolling updates; pin for reproducibility.
+   */
+  OPENCODE_VERSION: z.string().min(1).default("latest"),
+  /**
+   * Install prefix for `npm install -g --prefix` (binary at `$PREFIX/bin/opencode`).
+   * Must be writable by the runner user.
+   */
+  OPENCODE_PREFIX: z.string().min(1).default("/app/.opencode"),
+  /** Override path to opencode binary (default `$OPENCODE_PREFIX/bin/opencode`). */
+  OPENCODE_BIN: z.string().optional(),
+  /** Hostname for managed `opencode serve` (loopback only by default). */
+  OPENCODE_SERVE_HOSTNAME: z.string().min(1).default("127.0.0.1"),
+  /** Port for managed `opencode serve` (should match OPENCODE_BASE_URL). */
+  OPENCODE_SERVE_PORT: z.coerce.number().int().min(1).max(65535).default(4096),
+  /**
+   * Hours between managed update checks (`npm install` + restart).
+   * 0 disables periodic updates (install still runs once at boot).
+   */
+  OPENCODE_UPDATE_INTERVAL_HOURS: z.coerce.number().min(0).default(24),
+  /** Max time for a single npm install of opencode-ai (ms). */
+  OPENCODE_INSTALL_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(600_000),
+  /** npm binary used for managed install (default `npm` on PATH). */
+  OPENCODE_NPM_BIN: z.string().min(1).default("npm"),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {
@@ -101,21 +148,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   const data = parsed.data;
-  // Drop compose smoke placeholders so they never poison git Authorization.
-  if (isPlaceholderGithubToken(data.GITHUB_TOKEN)) {
-    delete (data as { GITHUB_TOKEN?: string }).GITHUB_TOKEN;
-  }
-  const mode = data.HELM_MODE;
-
-  if (mode === "commercial-saas") {
-    if (!data.GATEWAY_URL) {
-      throw new Error("GATEWAY_URL is required when HELM_MODE=commercial-saas");
-    }
-  }
-
   return {
     ...data,
-    mode,
+    mode: data.HELM_MODE,
     version: loadVersion(),
   };
 }

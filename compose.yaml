@@ -48,7 +48,6 @@ services:
       HOST: 0.0.0.0
       PORT: "8080"
       LOG_LEVEL: info
-      GITHUB_TOKEN: smoke-local-token
       VFS_ENABLED: "true"
     volumes:
       - smoke-main:/app/main_repo

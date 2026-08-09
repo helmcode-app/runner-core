@@ -29,7 +29,7 @@ describe("authorize", () => {
 
 describe("authorizeWebSocketUpgrade", () => {
   it("accepts query token when header missing", () => {
-    const url = new URL("http://x/v1/agent?token=secret");
+    const url = new URL("http://x/v1/vfs?token=secret");
     assert.equal(
       authorizeWebSocketUpgrade(req(), "secret", url, { allowQueryToken: true }),
       true,
@@ -37,7 +37,7 @@ describe("authorizeWebSocketUpgrade", () => {
   });
 
   it("can disable query token", () => {
-    const url = new URL("http://x/v1/agent?token=secret");
+    const url = new URL("http://x/v1/vfs?token=secret");
     assert.equal(
       authorizeWebSocketUpgrade(req(), "secret", url, {
         allowQueryToken: false,

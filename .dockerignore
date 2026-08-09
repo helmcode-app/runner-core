@@ -14,3 +14,4 @@ services/vfs/bin
 services/runner/dist
 .idea
 .vscode
+./HelmCode

@@ -30,10 +30,8 @@ case "$TARGET" in
       sleep 1
     done
     echo "OK — try:"
-    echo "  curl -s http://127.0.0.1:18080/health"
-    echo "  curl -s -X POST http://127.0.0.1:18080/v1/tasks/sync \\"
-    echo "    -H 'content-type: application/json' \\"
-    echo "    -d '{\"prompt\":\"smoke\",\"testCommand\":\"true\"}'"
+    echo "  curl -s http://127.0.0.1:18080/health | jq"
+    echo "  curl -s http://127.0.0.1:18080/v1/status | jq"
     echo "Stop with: docker compose down"
     ;;
   smoke-down)

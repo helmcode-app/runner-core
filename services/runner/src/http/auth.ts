@@ -16,7 +16,7 @@ export function authorize(
 }
 
 /**
- * WebSocket Upgrade auth (unified ingress for /v1/vfs, /v1/agent, /v1/terminal):
+ * WebSocket Upgrade auth (unified ingress for /v1/vfs, /v1/terminal):
  * 1. Authorization: Bearer <token>
  * 2. Optional `?token=` query (browser / xterm convenience)
  * 3. When OPENCORE_API_TOKEN unset → open (dev)

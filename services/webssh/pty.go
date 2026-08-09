@@ -53,6 +53,9 @@ func spawnLocalPty(shell []string, cwd string, cols, rows int) (*LocalSession, e
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",
+		"CLICOLOR=1",
+		"CLICOLOR_FORCE=1",
+		"FORCE_COLOR=1",
 		"HELM_TERMINAL=1",
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{

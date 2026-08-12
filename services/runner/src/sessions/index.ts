@@ -2,14 +2,15 @@
  * Agent sessions API — stable Helm DTOs; runtime adapter is pluggable.
  *
  * Package layout:
- *   types.ts      Public DTOs
- *   routes.ts     HTTP `/v1/sessions/*`
- *   errors.ts     Upstream → HTTP errors
- *   mapper.ts     Wire → session + timeline
- *   map-tools.ts  Tool/patch → ToolAction
- *   map-util.ts   Shared field helpers
- *   models.ts     Provider model catalog
- *   sse.ts        Event stream proxy
+ *   types.ts            Public DTOs
+ *   routes.ts           HTTP `/v1/sessions/*`
+ *   errors.ts           Upstream → HTTP errors
+ *   mapper.ts           Wire → session + timeline
+ *   map-tools.ts        Tool/patch → ToolAction labels
+ *   map-tool-content.ts Extract path/diff body from tool parts
+ *   map-util.ts         Shared field helpers
+ *   models.ts           Provider model catalog
+ *   sse.ts              Event stream proxy
  */
 export {
   handleSessionHttp,

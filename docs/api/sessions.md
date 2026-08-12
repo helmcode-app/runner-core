@@ -180,6 +180,11 @@ iPad UX: long-press / “Restore checkpoint” on a chat bubble → confirm → 
 | `sessions/routes.ts` | HTTP handlers |
 | `sessions/mapper.ts` | Wire → session + timeline |
 | `sessions/map-tools.ts` | Tool/patch → `ToolAction` rows |
+| `sessions/map-tool-content.ts` | Extract path / diff body from tool parts |
 | `sessions/models.ts` | Connected provider model catalog |
 | `sessions/sse.ts` | Event stream proxy |
-| `src/opencode/` | Private OpenCode client, managed runtime, prompt/mode |
+| `src/opencode/` | Private OpenCode adapter |
+| `opencode/client.ts` | Session/message API surface |
+| `opencode/transport.ts` | HTTP transport |
+| `opencode/runtime.ts` | Managed install + serve |
+| `opencode/binary.ts` | Binary path / package helpers |

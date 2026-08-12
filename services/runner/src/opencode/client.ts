@@ -11,6 +11,12 @@
 
 import type { Logger } from "../logger.js";
 import { OpenCodeUpstreamError } from "./types.js";
+import {
+  OpenCodeTransport,
+  enc,
+  withSignal,
+  type TransportRequestOpts,
+} from "./transport.js";
 
 export interface OpenCodeClientOptions {
   /** Base URL of opencode serve (no trailing slash). */
@@ -22,32 +28,36 @@ export interface OpenCodeClientOptions {
   logger?: Logger;
 }
 
-type RequestOpts = {
-  body?: unknown;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  accept?: string;
-  expectNoContent?: boolean;
-};
-
 export class OpenCodeClient {
   readonly baseUrl: string;
   private readonly timeoutMs: number;
-  private readonly authHeader: string | undefined;
-  private readonly log: Logger | undefined;
+  private readonly transport: OpenCodeTransport;
 
   constructor(opts: OpenCodeClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? 30_000;
-    this.log = opts.logger;
-    if (opts.basicAuth?.password) {
-      const user = opts.basicAuth.username || "opencode";
-      const token = Buffer.from(
-        `${user}:${opts.basicAuth.password}`,
-        "utf8",
-      ).toString("base64");
-      this.authHeader = `Basic ${token}`;
-    }
+    this.transport = new OpenCodeTransport({
+      baseUrl: this.baseUrl,
+      timeoutMs: this.timeoutMs,
+      ...(opts.basicAuth !== undefined ? { basicAuth: opts.basicAuth } : {}),
+      ...(opts.logger !== undefined ? { logger: opts.logger } : {}),
+    });
+  }
+
+  private requestJson<T = unknown>(
+    method: string,
+    path: string,
+    opts: TransportRequestOpts = {},
+  ): Promise<T> {
+    return this.transport.requestJson(method, path, opts);
+  }
+
+  private request(
+    method: string,
+    path: string,
+    opts: TransportRequestOpts = {},
+  ): Promise<Response> {
+    return this.transport.request(method, path, opts);
   }
 
   // ── Health ─────────────────────────────────────────────────
@@ -70,7 +80,6 @@ export class OpenCodeClient {
 
   /**
    * GET /provider — installed providers + models; `connected` lists authed providers.
-   * @see https://opencode.ai/docs/server/
    */
   async listProviders(signal?: AbortSignal): Promise<unknown> {
     return this.requestJson("GET", "/provider", withSignal({}, signal));
@@ -78,7 +87,6 @@ export class OpenCodeClient {
 
   // ── Sessions ───────────────────────────────────────────────
 
-  /** POST /session  body: { parentID?, title? } */
   async createSession(
     body: { title?: string; parentID?: string } = {},
     signal?: AbortSignal,
@@ -86,12 +94,10 @@ export class OpenCodeClient {
     return this.requestJson("POST", "/session", withSignal({ body }, signal));
   }
 
-  /** GET /session */
   async listSessions(signal?: AbortSignal): Promise<unknown> {
     return this.requestJson("GET", "/session", withSignal({}, signal));
   }
 
-  /** GET /session/:id */
   async getSession(sessionId: string, signal?: AbortSignal): Promise<unknown> {
     return this.requestJson(
       "GET",
@@ -100,7 +106,6 @@ export class OpenCodeClient {
     );
   }
 
-  /** DELETE /session/:id */
   async deleteSession(sessionId: string, signal?: AbortSignal): Promise<unknown> {
     return this.requestJson(
       "DELETE",
@@ -109,7 +114,6 @@ export class OpenCodeClient {
     );
   }
 
-  /** POST /session/:id/abort — cancel in-flight LLM work */
   async abortSession(sessionId: string, signal?: AbortSignal): Promise<unknown> {
     return this.requestJson(
       "POST",
@@ -120,7 +124,6 @@ export class OpenCodeClient {
 
   /**
    * POST /session/:id/revert — undo effects of a message (and later ones).
-   * Body: `{ messageID: "msg_…" }`
    */
   async revertSession(
     sessionId: string,
@@ -134,7 +137,6 @@ export class OpenCodeClient {
     );
   }
 
-  /** POST /session/:id/unrevert — restore previously reverted messages. */
   async unrevertSession(
     sessionId: string,
     signal?: AbortSignal,
@@ -146,10 +148,6 @@ export class OpenCodeClient {
     );
   }
 
-  /**
-   * GET /session/:id/diff?messageID=
-   * File changes produced for a user message (optional filter).
-   */
   async sessionDiff(
     sessionId: string,
     opts: { messageID?: string; signal?: AbortSignal } = {},
@@ -167,10 +165,6 @@ export class OpenCodeClient {
 
   // ── Messages ───────────────────────────────────────────────
 
-  /**
-   * GET /session/:id/message?limit=
-   * Full history for offline rebuild on the iPad.
-   */
   async listMessages(
     sessionId: string,
     opts: { limit?: number; signal?: AbortSignal } = {},
@@ -187,9 +181,7 @@ export class OpenCodeClient {
   }
 
   /**
-   * POST /session/:id/prompt_async
-   * Fire-and-forget: OpenCode keeps running if the iPad disconnects.
-   * Upstream returns 204 No Content on success.
+   * POST /session/:id/prompt_async — fire-and-forget (204).
    */
   async promptAsync(
     sessionId: string,
@@ -204,8 +196,7 @@ export class OpenCodeClient {
   }
 
   /**
-   * POST /session/:id/message — synchronous (waits for agent turn).
-   * Prefer promptAsync for offline-capable iPad flows.
+   * POST /session/:id/message — synchronous (prefer promptAsync for iPad).
    */
   async promptSync(
     sessionId: string,
@@ -226,7 +217,6 @@ export class OpenCodeClient {
 
   /**
    * Open GET /global/event (SSE). Falls back to GET /event on 404.
-   * Caller must cancel `signal` / destroy the body to clean up.
    */
   async openEventStream(signal?: AbortSignal): Promise<Response> {
     const paths = ["/global/event", "/event"];
@@ -259,152 +249,20 @@ export class OpenCodeClient {
         if (err instanceof OpenCodeUpstreamError && err.status === 404) {
           continue;
         }
-        if (isConnectionError(err)) throw err;
+        // Connection errors: fail fast (do not try alternate path).
+        if (
+          err instanceof OpenCodeUpstreamError &&
+          err.status === 502 &&
+          err.message.includes("unreachable")
+        ) {
+          throw err;
+        }
+        // Network failures rethrown from transport as OpenCodeUpstreamError 502.
+        if (err instanceof OpenCodeUpstreamError) throw err;
       }
     }
     throw lastErr instanceof Error
       ? lastErr
       : new OpenCodeUpstreamError("OpenCode SSE unavailable", 502);
   }
-
-  // ── HTTP core ──────────────────────────────────────────────
-
-  private async requestJson<T = unknown>(
-    method: string,
-    path: string,
-    opts: RequestOpts = {},
-  ): Promise<T> {
-    const res = await this.request(method, path, opts);
-    if (res.status === 204) return undefined as T;
-    const text = await res.text();
-    if (!res.ok) {
-      let parsed: unknown = text;
-      try {
-        parsed = text ? JSON.parse(text) : text;
-      } catch {
-        /* keep text */
-      }
-      throw new OpenCodeUpstreamError(
-        `OpenCode ${method} ${path} → HTTP ${res.status}`,
-        res.status,
-        parsed,
-      );
-    }
-    if (!text) return undefined as T;
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      return text as T;
-    }
-  }
-
-  private async request(
-    method: string,
-    path: string,
-    opts: RequestOpts = {},
-  ): Promise<Response> {
-    const url = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
-    const headers: Record<string, string> = {
-      Accept: opts.accept ?? "application/json",
-    };
-    if (this.authHeader) headers.Authorization = this.authHeader;
-
-    const init: RequestInit = { method, headers };
-    if (opts.body !== undefined) {
-      headers["Content-Type"] = "application/json";
-      init.body = JSON.stringify(opts.body);
-    }
-
-    const timeoutMs =
-      opts.timeoutMs !== undefined ? opts.timeoutMs : this.timeoutMs;
-    const controller = new AbortController();
-    const onOuterAbort = (): void => controller.abort(opts.signal?.reason);
-    if (opts.signal) {
-      if (opts.signal.aborted) controller.abort(opts.signal.reason);
-      else opts.signal.addEventListener("abort", onOuterAbort, { once: true });
-    }
-    init.signal = controller.signal;
-
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    if (timeoutMs > 0) {
-      timer = setTimeout(() => {
-        controller.abort(
-          new Error(`OpenCode request timed out after ${timeoutMs}ms`),
-        );
-      }, timeoutMs);
-      timer.unref?.();
-    }
-
-    this.log?.debug("opencode request", { method, path });
-
-    try {
-      const res = await fetch(url, init);
-
-      if (
-        opts.expectNoContent &&
-        res.ok &&
-        (res.status === 204 || res.status === 200)
-      ) {
-        return res;
-      }
-      if (opts.expectNoContent && !res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new OpenCodeUpstreamError(
-          `OpenCode ${method} ${path} → HTTP ${res.status}`,
-          res.status,
-          text,
-        );
-      }
-      return res;
-    } catch (err) {
-      if (err instanceof OpenCodeUpstreamError) throw err;
-      if (isConnectionError(err)) {
-        throw new OpenCodeUpstreamError(
-          `OpenCode unreachable at ${this.baseUrl} (${errMessage(err)}). Is \`opencode serve\` running?`,
-          502,
-        );
-      }
-      throw err;
-    } finally {
-      if (timer) clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", onOuterAbort);
-    }
-  }
-}
-
-function withSignal(base: RequestOpts, signal?: AbortSignal): RequestOpts {
-  if (!signal) return base;
-  return { ...base, signal };
-}
-
-function enc(id: string): string {
-  return encodeURIComponent(id);
-}
-
-function isConnectionError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const cause = err as {
-    cause?: { code?: string };
-    code?: string;
-    message?: string;
-  };
-  const code = cause.cause?.code ?? cause.code;
-  if (
-    code === "ECONNREFUSED" ||
-    code === "ENOTFOUND" ||
-    code === "ECONNRESET" ||
-    code === "ETIMEDOUT"
-  ) {
-    return true;
-  }
-  const msg = errMessage(err).toLowerCase();
-  return (
-    msg.includes("fetch failed") ||
-    msg.includes("econnrefused") ||
-    msg.includes("network")
-  );
-}
-
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

@@ -4,18 +4,32 @@
  *
  * Only used when OPENCODE_ENABLED && OPENCODE_MANAGED.
  * External daemons (OPENCODE_MANAGED=false) are unaffected.
+ *
+ * Binary path helpers: `./binary.ts`
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { access, constants, mkdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { runCommand } from "../util/process.js";
 import { materializeOpenCodeAuth, resolveOpenCodeHome } from "./auth.js";
+import {
+  isExecutable,
+  isFloatingTag,
+  openCodePackageSpec,
+  pathExists,
+  resolveOpenCodeBinaryPath,
+  sleep,
+} from "./binary.js";
 import { OpenCodeClient } from "./client.js";
 
-const OPENCODE_PACKAGE = "opencode-ai";
+// Re-export binary helpers used by tests / consumers.
+export {
+  openCodePackageSpec,
+  resolveOpenCodeBinaryPath,
+} from "./binary.js";
 
 export type ManagedRuntimeState =
   | "idle"
@@ -36,36 +50,6 @@ export interface ManagedOpenCodeStatus {
   error?: string;
   lastInstallAt?: string;
   lastUpdateCheckAt?: string;
-}
-
-export function resolveOpenCodeBinaryPath(config: AppConfig): string {
-  if (config.OPENCODE_BIN?.trim()) {
-    return config.OPENCODE_BIN.trim();
-  }
-  return path.join(config.OPENCODE_PREFIX, "bin", "opencode");
-}
-
-export function openCodePackageSpec(version: string): string {
-  const v = version.trim() || "latest";
-  return `${OPENCODE_PACKAGE}@${v}`;
-}
-
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await access(p, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function isExecutable(p: string): Promise<boolean> {
-  try {
-    await access(p, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export class ManagedOpenCodeRuntime {
@@ -435,15 +419,6 @@ export class ManagedOpenCodeRuntime {
     await this.killServe();
     await this.startServe();
   }
-}
-
-function isFloatingTag(version: string): boolean {
-  const v = version.trim().toLowerCase();
-  return v === "latest" || v === "next" || v === "beta" || v === "dev" || v.startsWith("latest-");
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Factory: only when sessions + managed mode are on. */

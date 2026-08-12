@@ -1,6 +1,15 @@
 /**
  * OpenCode Server adapter (private implementation detail).
  * Public HTTP surface lives under `sessions/` → `/v1/sessions/*`.
+ *
+ * Layout:
+ *   client.ts     Session/message API surface
+ *   transport.ts  HTTP transport + errors
+ *   runtime.ts    Managed install / serve lifecycle
+ *   binary.ts     Binary path / package helpers
+ *   auth.ts       Auth file materialization
+ *   prompt.ts     Async prompt mapping
+ *   mode.ts / model.ts  Composer → OpenCode fields
  */
 export { OpenCodeClient, type OpenCodeClientOptions } from "./client.js";
 export { submitPromptAsync } from "./prompt.js";

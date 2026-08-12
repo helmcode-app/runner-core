@@ -145,7 +145,7 @@ describe("mapHistoryToTimeline", () => {
     assert.equal(entries[0]?.meta?.reasoning, "I should check git status first");
     assert.equal(entries[1]?.kind, "tool");
     assert.deepEqual(entries[1]?.meta?.tools, [
-      "Ran git status",
+      "Run git status",
       "Edit src/a.ts",
       "Edit src/b.ts",
     ]);
@@ -163,7 +163,7 @@ describe("mapHistoryToTimeline", () => {
     assert.equal(entries[2]?.meta?.reasoning, "Looks clean");
   });
 
-  it("includes edit path and content body", () => {
+  it("includes edit path and content body from input", () => {
     const entries = mapHistoryToTimeline([
       {
         info: { id: "e1", role: "assistant", finish: "stop", time: { completed: 1 } },
@@ -179,7 +179,7 @@ describe("mapHistoryToTimeline", () => {
                 newString: "bar",
               },
               title: "pkg/hello.go",
-              output: "ok",
+              output: "Edit applied successfully.",
             },
           },
         ],
@@ -193,6 +193,69 @@ describe("mapHistoryToTimeline", () => {
     assert.equal(actions?.[0]?.path, "pkg/hello.go");
     assert.match(actions?.[0]?.content ?? "", /^- foo$/m);
     assert.match(actions?.[0]?.content ?? "", /^\+ bar$/m);
+  });
+
+  it("uses OpenCode state.metadata.diff for edit expand body", () => {
+    const entries = mapHistoryToTimeline([
+      {
+        info: { id: "e2", role: "assistant", finish: "stop", time: { completed: 1 } },
+        parts: [
+          {
+            type: "tool",
+            tool: "edit",
+            state: {
+              status: "completed",
+              input: { filePath: "src/a.ts" },
+              title: "src/a.ts",
+              output: "Edit applied successfully.",
+              metadata: {
+                diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+                filediff: {
+                  file: "src/a.ts",
+                  patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+                  additions: 1,
+                  deletions: 1,
+                },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+    const actions = entries[0]?.meta?.toolActions as
+      | Array<{ path?: string; content?: string }>
+      | undefined;
+    assert.equal(actions?.[0]?.path, "src/a.ts");
+    assert.match(actions?.[0]?.content ?? "", /\+new/);
+    assert.match(actions?.[0]?.content ?? "", /-old/);
+  });
+
+  it("falls back to filediff counts when diff body is missing", () => {
+    const entries = mapHistoryToTimeline([
+      {
+        info: { id: "e3", role: "assistant", finish: "stop", time: { completed: 1 } },
+        parts: [
+          {
+            type: "tool",
+            tool: "edit",
+            state: {
+              status: "completed",
+              input: { filePath: "only-counts.ts" },
+              title: "only-counts.ts",
+              output: "Edit applied successfully.",
+              metadata: {
+                filediff: { file: "only-counts.ts", additions: 4, deletions: 2 },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+    const actions = entries[0]?.meta?.toolActions as
+      | Array<{ content?: string; path?: string }>
+      | undefined;
+    assert.equal(actions?.[0]?.path, "only-counts.ts");
+    assert.match(actions?.[0]?.content ?? "", /\+4 \/ -2/);
   });
 
   it("does not emit patch:patch noise when files missing", () => {

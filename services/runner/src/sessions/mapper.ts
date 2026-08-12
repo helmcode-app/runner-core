@@ -236,10 +236,13 @@ function classifyParts(
 
   const answer = answers.join("\n\n");
   const reasoningText = reasoning.join("\n\n");
-  const tools = toolActions.map((a) => a.label);
+  // OpenCode often emits both a tool (edit/write) and a PatchPart for the same
+  // file — keep the richer row (with content) only.
+  const dedupedActions = dedupeToolActions(toolActions);
+  const tools = dedupedActions.map((a) => a.label);
   const hasText = answer.length > 0;
   const hasReasoning = reasoningText.length > 0;
-  const hasTools = toolActions.length > 0;
+  const hasTools = dedupedActions.length > 0;
 
   let displayText = answer;
   if (!displayText && hasTools) displayText = tools.join("\n");
@@ -250,11 +253,49 @@ function classifyParts(
     answer,
     reasoning: reasoningText,
     tools,
-    toolActions,
+    toolActions: dedupedActions,
     hasText,
     hasReasoning,
     hasTools,
   };
+}
+
+/** Collapse edit + patch rows that refer to the same path. */
+function dedupeToolActions(actions: ToolAction[]): ToolAction[] {
+  const best = new Map<string, ToolAction>();
+  const order: string[] = [];
+
+  const fileChangeKey = (a: ToolAction): string => {
+    const n = a.name.toLowerCase();
+    const isFileChange =
+      n === "edit" ||
+      n === "write" ||
+      n === "create" ||
+      n === "patch" ||
+      n.includes("replace") ||
+      n.includes("patch");
+    const path = a.path ?? a.label;
+    return isFileChange ? `file|${path}` : `${n}|${path}`;
+  };
+
+  for (const a of actions) {
+    const key = fileChangeKey(a);
+    const existing = best.get(key);
+    if (!existing) {
+      best.set(key, a);
+      order.push(key);
+      continue;
+    }
+    const existingLen = existing.content?.length ?? 0;
+    const nextLen = a.content?.length ?? 0;
+    if (
+      nextLen > existingLen ||
+      (nextLen === existingLen && a.name !== "patch" && existing.name === "patch")
+    ) {
+      best.set(key, a);
+    }
+  }
+  return order.map((k) => best.get(k)!).filter(Boolean);
 }
 
 // ── Status / kind / role ─────────────────────────────────────

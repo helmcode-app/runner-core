@@ -1,7 +1,26 @@
 /**
  * Flatten OpenCode GET /provider into Helm model picker options.
- * Only providers listed in `connected` (have credentials) are included.
+ *
+ * Prefer an explicit `allowProviders` allow-list (from OPENCODE_GO/ZEN_API_KEY)
+ * so OpenCode cannot surface Zen when only Go is configured (or vice versa).
+ * When no allow-list is given, fall back to OpenCode `connected` (external mode).
  */
+
+import type { AppConfig } from "../config.js";
+import { enabledOpenCodeProviderIds } from "../opencode/auth.js";
+import type { OpenCodeClient } from "../opencode/client.js";
+import { asRecord, firstString } from "./map-util.js";
+import {
+  clearProviderCatalogCache,
+  getCachedProviderCatalog,
+  setCachedProviderCatalog,
+} from "./models-cache.js";
+
+export {
+  clearProviderCatalogCache,
+  getCachedProviderCatalog,
+  setCachedProviderCatalog,
+} from "./models-cache.js";
 
 export interface SessionModelOption {
   /** `providerID/modelID` wire id for prompt body. */
@@ -12,32 +31,85 @@ export interface SessionModelOption {
 
 export interface SessionModelsResponse {
   models: SessionModelOption[];
-  /** Preferred default when set (e.g. opencode/big-pickle). */
+  /** Preferred default when set (e.g. opencode-go/… or opencode/big-pickle). */
   default?: string;
+  /** Provider ids included in this response. */
   connected: string[];
 }
 
-export function mapProviderCatalog(raw: unknown): SessionModelsResponse {
+export interface MapProviderCatalogOptions {
+  /**
+   * When non-empty, only these provider ids are included (case-insensitive).
+   * Managed runner should pass keys from OPENCODE_GO_API_KEY / OPENCODE_ZEN_API_KEY.
+   */
+  allowProviders?: string[];
+}
+
+/**
+ * Load catalog for `/v1/sessions/models`: cache → OpenCode `/provider` → filter.
+ */
+export async function loadSessionModelsCatalog(
+  client: OpenCodeClient,
+  config: AppConfig,
+  opts: { forceRefresh?: boolean } = {},
+): Promise<SessionModelsResponse> {
+  if (opts.forceRefresh) {
+    clearProviderCatalogCache();
+  } else {
+    const cached = getCachedProviderCatalog();
+    if (cached) return cached;
+  }
+
+  const raw = await client.listProviders();
+  // Managed keys pin which catalogs we expose (Go vs Zen). External mode
+  // with no keys falls back to OpenCode `connected` only.
+  const allowProviders = enabledOpenCodeProviderIds(config);
+  const mapped = mapProviderCatalog(raw, {
+    ...(allowProviders.length > 0 ? { allowProviders } : {}),
+  });
+  setCachedProviderCatalog(mapped);
+  return mapped;
+}
+
+export function mapProviderCatalog(
+  raw: unknown,
+  opts: MapProviderCatalogOptions = {},
+): SessionModelsResponse {
   const o = asRecord(raw);
-  const connected = toStringArray(o.connected);
-  const connectedSet = new Set(connected.map((c) => c.toLowerCase()));
+  const upstreamConnected = toStringArray(o.connected);
+  const upstreamSet = new Set(upstreamConnected.map((c) => c.toLowerCase()));
+
+  const allowRaw = (opts.allowProviders ?? [])
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const allowSet =
+    allowRaw.length > 0
+      ? new Set(allowRaw.map((p) => p.toLowerCase()))
+      : null;
 
   const all = Array.isArray(o.all) ? o.all : [];
   const models: SessionModelOption[] = [];
+  const includedProviders: string[] = [];
 
   for (const item of all) {
     const p = asRecord(item);
     const providerID = firstString(p, ["id", "providerID"]);
     if (!providerID) continue;
-    // If connected is empty (older OpenCode), include everything; else filter.
-    if (connectedSet.size > 0 && !connectedSet.has(providerID.toLowerCase())) {
+    const pid = providerID.toLowerCase();
+
+    if (allowSet) {
+      if (!allowSet.has(pid)) continue;
+    } else if (upstreamSet.size > 0 && !upstreamSet.has(pid)) {
+      // External / no allow-list: trust OpenCode connected when present.
       continue;
     }
+
     const providerName = firstString(p, ["name"]) ?? providerID;
     const modelMap = p.models;
     if (!modelMap || typeof modelMap !== "object" || Array.isArray(modelMap)) {
       continue;
     }
+    includedProviders.push(providerID);
     for (const [modelID, meta] of Object.entries(
       modelMap as Record<string, unknown>,
     )) {
@@ -58,25 +130,21 @@ export function mapProviderCatalog(raw: unknown): SessionModelsResponse {
     return a.title.localeCompare(b.title);
   });
 
-  // Prefer OpenCode free defaults when present among connected.
-  const preferred =
-    models.find((m) => m.id === "opencode/big-pickle")?.id ??
-    models.find((m) => m.id.startsWith("opencode/"))?.id ??
-    models[0]?.id;
-
-  const defaults = asRecord(o.default);
-  let fromDefault: string | undefined;
-  for (const [pid, mid] of Object.entries(defaults)) {
-    if (typeof mid === "string" && mid && connectedSet.has(pid.toLowerCase())) {
-      const id = mid.includes("/") ? mid : `${pid}/${mid}`;
-      if (models.some((m) => m.id === id)) {
-        fromDefault = id;
-        break;
-      }
-    }
-  }
+  const preferred = pickPreferredDefault(models);
+  const fromDefault = pickFromOpenCodeDefaults(
+    asRecord(o.default),
+    models,
+    allowSet ?? upstreamSet,
+  );
 
   const chosenDefault = fromDefault ?? preferred;
+  const connected = resolveConnectedList(
+    allowSet,
+    allowRaw,
+    includedProviders,
+    upstreamConnected,
+  );
+
   const out: SessionModelsResponse = {
     models,
     connected,
@@ -87,28 +155,52 @@ export function mapProviderCatalog(raw: unknown): SessionModelsResponse {
   return out;
 }
 
+function pickPreferredDefault(models: SessionModelOption[]): string | undefined {
+  // Prefer Go subscription defaults, then Zen free, then first available.
+  return (
+    models.find((m) => m.id.startsWith("opencode-go/"))?.id ??
+    models.find((m) => m.id === "opencode/big-pickle")?.id ??
+    models.find((m) => m.id.startsWith("opencode/"))?.id ??
+    models[0]?.id
+  );
+}
+
+function pickFromOpenCodeDefaults(
+  defaults: Record<string, unknown>,
+  models: SessionModelOption[],
+  allowed: Set<string>,
+): string | undefined {
+  for (const [pid, mid] of Object.entries(defaults)) {
+    if (typeof mid !== "string" || !mid) continue;
+    if (allowed.size > 0 && !allowed.has(pid.toLowerCase())) continue;
+    const id = mid.includes("/") ? mid : `${pid}/${mid}`;
+    if (models.some((m) => m.id === id)) return id;
+  }
+  return undefined;
+}
+
+function resolveConnectedList(
+  allowSet: Set<string> | null,
+  allowRaw: string[],
+  includedProviders: string[],
+  upstreamConnected: string[],
+): string[] {
+  if (allowSet && allowRaw.length > 0) {
+    return includedProviders;
+  }
+  if (upstreamConnected.length > 0) {
+    return upstreamConnected.filter((c) =>
+      includedProviders.some((p) => p.toLowerCase() === c.toLowerCase()),
+    );
+  }
+  return includedProviders;
+}
+
 function humanizeModelId(id: string): string {
   return id
     .replace(/-free$/i, "")
     .replace(/[-_]/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function asRecord(v: unknown): Record<string, unknown> {
-  return v && typeof v === "object" && !Array.isArray(v)
-    ? (v as Record<string, unknown>)
-    : {};
-}
-
-function firstString(
-  o: Record<string, unknown>,
-  keys: string[],
-): string | undefined {
-  for (const key of keys) {
-    const v = o[key];
-    if (typeof v === "string" && v) return v;
-  }
-  return undefined;
 }
 
 function toStringArray(v: unknown): string[] {

@@ -43,8 +43,8 @@ describe("opencode runtime helpers", () => {
     assert.equal(cfg.OPENCODE_SERVE_PORT, 4096);
     assert.equal(cfg.OPENCODE_UPDATE_INTERVAL_HOURS, 24);
     assert.equal(cfg.OPENCODE_INSTALL_TIMEOUT_MS, 600_000);
-    assert.equal(cfg.OPENCODE_AUTH_PROVIDER, "opencode");
-    assert.equal(cfg.OPENCODE_API_KEY, undefined);
+    assert.equal(cfg.OPENCODE_GO_API_KEY, undefined);
+    assert.equal(cfg.OPENCODE_ZEN_API_KEY, undefined);
   });
 
   it("allows disabling periodic updates", () => {

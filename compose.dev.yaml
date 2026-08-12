@@ -5,7 +5,7 @@
 #        export HOST_REPO=/Users/you/Developer/src/github.com/org/my-repo
 #      or put HOST_REPO=... in runner-core/.env
 #   2. Optional secrets / overrides in runner-core/.env (auto-loaded if present):
-#        OPENCODE_API_KEY (required for managed sessions), OPENCORE_API_TOKEN, …
+#        OPENCODE_GO_API_KEY and/or OPENCODE_ZEN_API_KEY, OPENCORE_API_TOKEN, …
 #   3. Start:
 #        docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 #   4. Probe:

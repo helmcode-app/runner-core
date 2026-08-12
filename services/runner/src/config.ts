@@ -64,18 +64,22 @@ const envSchema = z.object({
   OPENCODE_SERVER_USERNAME: z.string().min(1).default("opencode"),
   /** Non-SSE HTTP timeout to OpenCode (ms). */
   OPENCODE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
-  /** Default model string for prompts (e.g. opencode/big-pickle). */
+  /**
+   * Default model string for prompts (e.g. `opencode-go/glm-5.1` or `opencode/big-pickle`).
+   * When unset, the sessions models catalog picks a preferred default among enabled providers.
+   */
   OPENCODE_DEFAULT_MODEL: z.string().optional(),
   /**
-   * Provider API key for managed OpenCode (OpenCode Go / Zen / etc.).
-   * Written to `$OPENCODE_HOME/.local/share/opencode/auth.json` before serve starts.
-   * Required when OPENCODE_MANAGED=true. Same path for local and cloud — no host mount.
+   * OpenCode **Go** subscription API key → auth.json provider `opencode-go`.
+   * Models: `opencode-go/<model>`. Set this alone if you only subscribe to Go.
    */
-  OPENCODE_API_KEY: z.string().optional(),
+  OPENCODE_GO_API_KEY: z.string().optional(),
   /**
-   * Provider id stored in auth.json (must match model prefix, e.g. `opencode/...` → `opencode`).
+   * OpenCode **Zen** pay-as-you-go API key → auth.json provider `opencode`.
+   * Models: `opencode/<model>`. Same dashboard key string may be used for both vars
+   * if you intentionally enable both catalogs.
    */
-  OPENCODE_AUTH_PROVIDER: z.string().min(1).default("opencode"),
+  OPENCODE_ZEN_API_KEY: z.string().optional(),
   /**
    * Home directory used for OpenCode auth/config when managed.
    * Default: process HOME / os.homedir(). Docker image uses /app for user helm.

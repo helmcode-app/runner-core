@@ -1,5 +1,5 @@
 /**
- * Backend-agnostic agent session API (open-core).
+ * Backend-agnostic agent session API (open-core) — HTTP dispatch only.
  *
  *   GET    /v1/sessions/health
  *   GET    /v1/sessions/models
@@ -15,26 +15,32 @@
  *   POST   /v1/sessions/:id/unrevert
  *   GET    /v1/sessions/:id/diff
  *
- * Adapter today: local OpenCode Server (implementation detail).
+ * Handlers: `./handlers.ts`. Adapter today: local OpenCode Server.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AppConfig } from "../config.js";
-import { readJson, sendJson } from "../http/index.js";
+import { sendJson } from "../http/index.js";
 import type { Logger } from "../logger.js";
 import type { OpenCodeClient } from "../opencode/client.js";
-import { submitPromptAsync } from "../opencode/prompt.js";
 import type { ManagedOpenCodeRuntime } from "../opencode/runtime.js";
 import { sendSessionError } from "./errors.js";
-import { mapHistoryToTimeline, mapSession, mapSessionList } from "./mapper.js";
-import { mapProviderCatalog } from "./models.js";
+import {
+  handleAbort,
+  handleCreate,
+  handleDelete,
+  handleDiff,
+  handleGet,
+  handleHealth,
+  handleHistory,
+  handleList,
+  handleModels,
+  handlePrompt,
+  handleRevert,
+  handleUnrevert,
+  type SessionHandlerContext,
+} from "./handlers.js";
 import { proxySessionEvents } from "./sse.js";
-import type {
-  CreateSessionRequest,
-  PromptRequest,
-  RevertSessionRequest,
-  SessionHistoryResponse,
-} from "./types.js";
 
 export interface SessionRouteContext {
   config: AppConfig;
@@ -72,31 +78,36 @@ export async function handleSessionHttp(
     return true;
   }
 
-  const client = ctx.client;
   const log = ctx.logger.child({ component: "sessions" });
+  const hctx: SessionHandlerContext = {
+    config: ctx.config,
+    client: ctx.client,
+    logger: log,
+    ...(ctx.managedOpenCode !== undefined
+      ? { managedOpenCode: ctx.managedOpenCode }
+      : {}),
+  };
 
   try {
     if (method === "GET" && pathname === "/v1/sessions/health") {
-      return await handleHealth(res, client, ctx);
+      return await handleHealth(res, hctx);
     }
 
     if (method === "GET" && pathname === "/v1/sessions/models") {
-      return await handleModels(res, client);
+      return await handleModels(req, res, hctx);
     }
 
     if (method === "GET" && pathname === "/v1/sessions/events") {
-      await proxySessionEvents(client, req, res, log);
+      await proxySessionEvents(ctx.client, req, res, log);
       return true;
     }
 
     if (method === "POST" && pathname === "/v1/sessions") {
-      return await handleCreate(req, res, client, log);
+      return await handleCreate(req, res, hctx);
     }
 
     if (method === "GET" && pathname === "/v1/sessions") {
-      const raw = await client.listSessions();
-      sendJson(res, 200, { sessions: mapSessionList(raw) });
-      return true;
+      return await handleList(res, hctx);
     }
 
     const m = pathname.match(SESSION_ID_ACTION);
@@ -109,52 +120,35 @@ export async function handleSessionHttp(
     const action = m[2];
 
     if (method === "GET" && !action) {
-      const raw = await client.getSession(sessionId);
-      sendJson(res, 200, { session: mapSession(raw) });
-      return true;
+      return await handleGet(res, hctx, sessionId);
     }
 
     if (method === "DELETE" && !action) {
-      await client.deleteSession(sessionId);
-      sendJson(res, 200, { sessionId, deleted: true });
-      return true;
+      return await handleDelete(res, hctx, sessionId);
     }
 
     if (method === "POST" && action === "prompt") {
-      return await handlePrompt(req, res, client, ctx, log, sessionId);
+      return await handlePrompt(req, res, hctx, sessionId);
     }
 
     if (method === "GET" && action === "history") {
-      return await handleHistory(req, res, client, log, sessionId);
+      return await handleHistory(req, res, hctx, sessionId);
     }
 
     if (method === "POST" && action === "abort") {
-      const result = await client.abortSession(sessionId);
-      const aborted =
-        result === true ||
-        result === undefined ||
-        (typeof result === "object" && result !== null);
-      sendJson(res, 200, { sessionId, aborted: Boolean(aborted) });
-      return true;
+      return await handleAbort(res, hctx, sessionId);
     }
 
     if (method === "POST" && action === "revert") {
-      return await handleRevert(req, res, client, log, sessionId);
+      return await handleRevert(req, res, hctx, sessionId);
     }
 
     if (method === "POST" && action === "unrevert") {
-      log.info("session unrevert", { sessionId });
-      const raw = await client.unrevertSession(sessionId);
-      sendJson(res, 200, {
-        sessionId,
-        unreverted: true,
-        session: mapSession(raw),
-      });
-      return true;
+      return await handleUnrevert(res, hctx, sessionId);
     }
 
     if (method === "GET" && action === "diff") {
-      return await handleDiff(req, res, client, sessionId);
+      return await handleDiff(req, res, hctx, sessionId);
     }
 
     sendJson(res, 404, { error: "session route not found" });
@@ -162,196 +156,4 @@ export async function handleSessionHttp(
   } catch (err) {
     return sendSessionError(res, err, log);
   }
-}
-
-// ── Handlers ─────────────────────────────────────────────────
-
-async function handleHealth(
-  res: ServerResponse,
-  client: OpenCodeClient,
-  ctx: SessionRouteContext,
-): Promise<true> {
-  const managed = ctx.managedOpenCode?.status;
-  try {
-    const h = await client.health();
-    sendJson(res, 200, {
-      ok: h.healthy,
-      provider: "session-runtime",
-      ...(h.version !== undefined ? { version: h.version } : {}),
-      ...(managed !== undefined ? { managed } : { managed: false }),
-    });
-  } catch (err) {
-    sendJson(res, 502, {
-      ok: false,
-      provider: "session-runtime",
-      error: err instanceof Error ? err.message : String(err),
-      ...(managed !== undefined ? { managed } : { managed: false }),
-    });
-  }
-  return true;
-}
-
-async function handleModels(
-  res: ServerResponse,
-  client: OpenCodeClient,
-): Promise<true> {
-  try {
-    const raw = await client.listProviders();
-    sendJson(res, 200, mapProviderCatalog(raw));
-  } catch (err) {
-    sendJson(res, 502, {
-      error: err instanceof Error ? err.message : String(err),
-      models: [],
-      connected: [],
-    });
-  }
-  return true;
-}
-
-async function handleCreate(
-  req: IncomingMessage,
-  res: ServerResponse,
-  client: OpenCodeClient,
-  log: Logger,
-): Promise<true> {
-  const body = (await readJson(req).catch(() => ({}))) as CreateSessionRequest;
-  const raw = await client.createSession({
-    ...(body.title !== undefined ? { title: body.title } : {}),
-    ...(body.parentId !== undefined ? { parentID: body.parentId } : {}),
-  });
-  const session = mapSession(raw);
-  log.info("session created", { sessionId: session.id });
-  sendJson(res, 201, { session });
-  return true;
-}
-
-async function handlePrompt(
-  req: IncomingMessage,
-  res: ServerResponse,
-  client: OpenCodeClient,
-  ctx: SessionRouteContext,
-  log: Logger,
-  sessionId: string,
-): Promise<true> {
-  const body = (await readJson(req)) as PromptRequest;
-  log.info("session prompt", {
-    sessionId,
-    mode: body.mode ?? "agent",
-    model: body.model ?? ctx.config.OPENCODE_DEFAULT_MODEL,
-    promptLen: body.prompt?.length ?? 0,
-  });
-  const accepted = await submitPromptAsync(client, ctx.config, sessionId, {
-    prompt: body.prompt,
-    ...(body.model !== undefined ? { model: body.model } : {}),
-    ...(body.mode !== undefined ? { mode: body.mode } : {}),
-    ...(body.contextPaths !== undefined
-      ? { contextPaths: body.contextPaths }
-      : {}),
-    ...(body.system !== undefined ? { system: body.system } : {}),
-    ...(body.messageId !== undefined ? { messageID: body.messageId } : {}),
-  });
-  log.info("session prompt accepted", {
-    sessionId: accepted.sessionId,
-    mode: accepted.mode,
-    model: accepted.model,
-  });
-  // Public response never includes vendor `upstream` field.
-  sendJson(res, 202, {
-    sessionId: accepted.sessionId,
-    status: accepted.status,
-    mode: accepted.mode,
-    ...(accepted.model !== undefined ? { model: accepted.model } : {}),
-  });
-  return true;
-}
-
-async function handleHistory(
-  req: IncomingMessage,
-  res: ServerResponse,
-  client: OpenCodeClient,
-  log: Logger,
-  sessionId: string,
-): Promise<true> {
-  const url = requestUrl(req);
-  const limitRaw = url.searchParams.get("limit");
-  const limit =
-    limitRaw != null && limitRaw !== ""
-      ? Number.parseInt(limitRaw, 10)
-      : undefined;
-
-  const [messages, sessionRaw] = await Promise.all([
-    client.listMessages(sessionId, {
-      ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
-    }),
-    client.getSession(sessionId).catch(() => undefined),
-  ]);
-
-  const entries = mapHistoryToTimeline(messages);
-  if (entries.length === 0) {
-    log.debug("session history empty", {
-      sessionId,
-      rawType: Array.isArray(messages) ? "array" : typeof messages,
-      rawLen: Array.isArray(messages) ? messages.length : undefined,
-    });
-  }
-
-  const payload: SessionHistoryResponse = {
-    sessionId,
-    entries,
-    ...(sessionRaw !== undefined ? { session: mapSession(sessionRaw) } : {}),
-  };
-  sendJson(res, 200, payload);
-  return true;
-}
-
-async function handleRevert(
-  req: IncomingMessage,
-  res: ServerResponse,
-  client: OpenCodeClient,
-  log: Logger,
-  sessionId: string,
-): Promise<true> {
-  const body = (await readJson(req).catch(() => ({}))) as RevertSessionRequest;
-  const messageID = (body.messageId ?? body.messageID ?? "").trim();
-  if (!messageID) {
-    sendJson(res, 400, { error: "messageId is required" });
-    return true;
-  }
-  const partID = (body.partId ?? body.partID)?.trim();
-  log.info("session revert", { sessionId, messageID });
-  const raw = await client.revertSession(sessionId, {
-    messageID,
-    ...(partID ? { partID } : {}),
-  });
-  sendJson(res, 200, {
-    sessionId,
-    reverted: true,
-    session: mapSession(raw),
-  });
-  return true;
-}
-
-async function handleDiff(
-  req: IncomingMessage,
-  res: ServerResponse,
-  client: OpenCodeClient,
-  sessionId: string,
-): Promise<true> {
-  const url = requestUrl(req);
-  const messageID =
-    url.searchParams.get("messageId") ??
-    url.searchParams.get("messageID") ??
-    undefined;
-  const raw = await client.sessionDiff(sessionId, {
-    ...(messageID ? { messageID } : {}),
-  });
-  sendJson(res, 200, {
-    sessionId,
-    diffs: Array.isArray(raw) ? raw : [],
-  });
-  return true;
-}
-
-function requestUrl(req: IncomingMessage): URL {
-  return new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 }

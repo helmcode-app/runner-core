@@ -7,8 +7,10 @@
  * Shape (matches `/connect` / `opencode auth login` for type=api providers):
  *   { "<providerID>": { "type": "api", "key": "..." } }
  *
- * Local and cloud use the same path: set OPENCODE_API_KEY (Secret / .env).
- * No host auth.json mount required.
+ * Go and Zen are separate providers (same account key may be used for both):
+ *   OPENCODE_GO_API_KEY  → opencode-go
+ *   OPENCODE_ZEN_API_KEY → opencode
+ * At least one is required when OPENCODE_MANAGED=true.
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -17,6 +19,11 @@ import path from "node:path";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 
+/** OpenCode Go subscription catalog (`opencode-go/<model>`). */
+export const OPENCODE_GO_PROVIDER_ID = "opencode-go";
+/** OpenCode Zen pay-as-you-go catalog (`opencode/<model>`). */
+export const OPENCODE_ZEN_PROVIDER_ID = "opencode";
+
 export interface OpenCodeAuthEntry {
   type: "api";
   key: string;
@@ -24,18 +31,53 @@ export interface OpenCodeAuthEntry {
 
 export type OpenCodeAuthFile = Record<string, OpenCodeAuthEntry>;
 
-/** Build auth.json object for a single API-key provider. */
+export interface OpenCodeAuthProviderSlot {
+  providerId: string;
+  key: string;
+}
+
+/**
+ * Providers enabled by env keys (order: Go then Zen).
+ * Empty when neither OPENCODE_GO_API_KEY nor OPENCODE_ZEN_API_KEY is set.
+ */
+export function resolveOpenCodeAuthProviders(
+  config: AppConfig,
+): OpenCodeAuthProviderSlot[] {
+  const slots: OpenCodeAuthProviderSlot[] = [];
+  const go = config.OPENCODE_GO_API_KEY?.trim();
+  const zen = config.OPENCODE_ZEN_API_KEY?.trim();
+  if (go) {
+    slots.push({ providerId: OPENCODE_GO_PROVIDER_ID, key: go });
+  }
+  if (zen) {
+    slots.push({ providerId: OPENCODE_ZEN_PROVIDER_ID, key: zen });
+  }
+  return slots;
+}
+
+/** Provider ids we materialize / should expose in the model catalog. */
+export function enabledOpenCodeProviderIds(config: AppConfig): string[] {
+  return resolveOpenCodeAuthProviders(config).map((s) => s.providerId);
+}
+
+/** Build auth.json from explicit provider slots. */
 export function buildOpenCodeAuthFile(
-  providerId: string,
-  apiKey: string,
+  slots: OpenCodeAuthProviderSlot[],
 ): OpenCodeAuthFile {
-  const id = providerId.trim();
-  const key = apiKey.trim();
-  if (!id) throw new Error("OPENCODE_AUTH_PROVIDER is empty");
-  if (!key) throw new Error("OPENCODE_API_KEY is empty");
-  return {
-    [id]: { type: "api", key },
-  };
+  if (slots.length === 0) {
+    throw new Error(
+      "At least one of OPENCODE_GO_API_KEY or OPENCODE_ZEN_API_KEY is required",
+    );
+  }
+  const file: OpenCodeAuthFile = {};
+  for (const slot of slots) {
+    const id = slot.providerId.trim();
+    const key = slot.key.trim();
+    if (!id) throw new Error("OpenCode provider id is empty");
+    if (!key) throw new Error(`OpenCode API key for ${id} is empty`);
+    file[id] = { type: "api", key };
+  }
+  return file;
 }
 
 export function serializeOpenCodeAuthFile(file: OpenCodeAuthFile): string {
@@ -57,36 +99,35 @@ export function resolveOpenCodeAuthPath(home: string): string {
 }
 
 /**
- * Write auth.json from OPENCODE_API_KEY before starting managed serve.
- * Throws if managed mode has no key (local and prod both require it).
+ * Write auth.json from OPENCODE_GO_API_KEY / OPENCODE_ZEN_API_KEY before serve.
+ * Throws if managed mode has no keys (local and prod both require at least one).
  */
 export async function materializeOpenCodeAuth(
   config: AppConfig,
   logger?: Logger,
-): Promise<{ authPath: string; providerId: string }> {
-  const apiKey = config.OPENCODE_API_KEY?.trim();
-  if (!apiKey) {
+): Promise<{ authPath: string; providerIds: string[] }> {
+  const slots = resolveOpenCodeAuthProviders(config);
+  if (slots.length === 0) {
     throw new Error(
-      "OPENCODE_API_KEY is required when OPENCODE_MANAGED=true " +
-        "(OpenCode Go / provider API key from the dashboard — not a host mount)",
+      "OPENCODE_GO_API_KEY and/or OPENCODE_ZEN_API_KEY is required when OPENCODE_MANAGED=true " +
+        "(OpenCode dashboard keys — not a host mount)",
     );
   }
 
-  const providerId = config.OPENCODE_AUTH_PROVIDER.trim() || "opencode";
   const home = resolveOpenCodeHome(config);
   const authPath = resolveOpenCodeAuthPath(home);
-  const body = serializeOpenCodeAuthFile(
-    buildOpenCodeAuthFile(providerId, apiKey),
-  );
+  const file = buildOpenCodeAuthFile(slots);
+  const body = serializeOpenCodeAuthFile(file);
 
   await mkdir(path.dirname(authPath), { recursive: true });
   await writeFile(authPath, body, { encoding: "utf8", mode: 0o600 });
 
+  const providerIds = slots.map((s) => s.providerId);
   logger?.info("opencode auth materialized", {
     authPath,
-    providerId,
-    // never log the key
+    providerIds,
+    // never log keys
   });
 
-  return { authPath, providerId };
+  return { authPath, providerIds };
 }

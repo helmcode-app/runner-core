@@ -20,12 +20,12 @@ iPad  ── /v1/sessions/* ──►  runner open-core  ──►  session runt
 ```bash
 OPENCODE_ENABLED=true
 OPENCODE_MANAGED=true
-OPENCODE_API_KEY=oc-…                 # dashboard key
-OPENCODE_AUTH_PROVIDER=opencode
-OPENCODE_DEFAULT_MODEL=opencode/big-pickle
+OPENCODE_GO_API_KEY=oc-…              # and/or OPENCODE_ZEN_API_KEY
+OPENCODE_DEFAULT_MODEL=opencode-go/glm-5.1
 OPENCODE_VERSION=latest
 OPENCODE_PREFIX=/app/.opencode
 ```
+
 
 **External** (you run serve yourself with your own auth):
 

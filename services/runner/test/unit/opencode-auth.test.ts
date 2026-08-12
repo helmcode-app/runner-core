@@ -5,54 +5,117 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { loadConfig } from "../../src/config.js";
 import {
+  OPENCODE_GO_PROVIDER_ID,
+  OPENCODE_ZEN_PROVIDER_ID,
   buildOpenCodeAuthFile,
+  enabledOpenCodeProviderIds,
   materializeOpenCodeAuth,
   resolveOpenCodeAuthPath,
+  resolveOpenCodeAuthProviders,
   serializeOpenCodeAuthFile,
 } from "../../src/opencode/auth.js";
 
 describe("opencode auth materialization", () => {
-  it("builds auth.json for an api-key provider", () => {
-    const file = buildOpenCodeAuthFile("opencode", "sk-test-123");
+  it("builds auth.json for Go and Zen slots", () => {
+    const file = buildOpenCodeAuthFile([
+      { providerId: OPENCODE_GO_PROVIDER_ID, key: "go-key" },
+      { providerId: OPENCODE_ZEN_PROVIDER_ID, key: "zen-key" },
+    ]);
     assert.deepEqual(file, {
-      opencode: { type: "api", key: "sk-test-123" },
+      "opencode-go": { type: "api", key: "go-key" },
+      opencode: { type: "api", key: "zen-key" },
     });
     const raw = serializeOpenCodeAuthFile(file);
-    assert.match(raw, /"type": "api"/);
-    assert.match(raw, /sk-test-123/);
+    assert.match(raw, /"opencode-go"/);
+    assert.match(raw, /go-key/);
   });
 
-  it("rejects empty key or provider", () => {
-    assert.throws(() => buildOpenCodeAuthFile("", "k"), /OPENCODE_AUTH_PROVIDER/);
-    assert.throws(() => buildOpenCodeAuthFile("opencode", "  "), /OPENCODE_API_KEY/);
+  it("rejects empty slots", () => {
+    assert.throws(() => buildOpenCodeAuthFile([]), /OPENCODE_GO_API_KEY/);
+    assert.throws(
+      () =>
+        buildOpenCodeAuthFile([
+          { providerId: OPENCODE_GO_PROVIDER_ID, key: "  " },
+        ]),
+      /empty/,
+    );
   });
 
-  it("writes auth.json under OPENCODE_HOME", async () => {
+  it("resolves providers from GO / ZEN env keys only", () => {
+    const goOnly = loadConfig({ OPENCODE_GO_API_KEY: "g" });
+    assert.deepEqual(enabledOpenCodeProviderIds(goOnly), [
+      OPENCODE_GO_PROVIDER_ID,
+    ]);
+
+    const zenOnly = loadConfig({ OPENCODE_ZEN_API_KEY: "z" });
+    assert.deepEqual(enabledOpenCodeProviderIds(zenOnly), [
+      OPENCODE_ZEN_PROVIDER_ID,
+    ]);
+
+    const both = loadConfig({
+      OPENCODE_GO_API_KEY: "g",
+      OPENCODE_ZEN_API_KEY: "z",
+    });
+    assert.deepEqual(
+      resolveOpenCodeAuthProviders(both).map((s) => s.providerId),
+      [OPENCODE_GO_PROVIDER_ID, OPENCODE_ZEN_PROVIDER_ID],
+    );
+
+    assert.deepEqual(enabledOpenCodeProviderIds(loadConfig({})), []);
+  });
+
+  it("writes auth.json under OPENCODE_HOME for Go key", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "oc-auth-"));
     try {
       const cfg = loadConfig({
-        OPENCODE_API_KEY: "go-secret-key",
-        OPENCODE_AUTH_PROVIDER: "opencode",
+        OPENCODE_GO_API_KEY: "go-secret-key",
         OPENCODE_HOME: home,
       });
-      const { authPath, providerId } = await materializeOpenCodeAuth(cfg);
-      assert.equal(providerId, "opencode");
+      const { authPath, providerIds } = await materializeOpenCodeAuth(cfg);
+      assert.deepEqual(providerIds, [OPENCODE_GO_PROVIDER_ID]);
       assert.equal(authPath, resolveOpenCodeAuthPath(home));
       const written = JSON.parse(await readFile(authPath, "utf8")) as {
-        opencode: { type: string; key: string };
+        "opencode-go": { type: string; key: string };
       };
-      assert.equal(written.opencode.type, "api");
-      assert.equal(written.opencode.key, "go-secret-key");
+      assert.equal(written["opencode-go"].type, "api");
+      assert.equal(written["opencode-go"].key, "go-secret-key");
+      assert.equal(
+        (written as { opencode?: unknown }).opencode,
+        undefined,
+      );
     } finally {
       await rm(home, { recursive: true, force: true });
     }
   });
 
-  it("requires OPENCODE_API_KEY when materializing", async () => {
+  it("writes both providers when both keys are set", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "oc-auth-both-"));
+    try {
+      const cfg = loadConfig({
+        OPENCODE_GO_API_KEY: "go-k",
+        OPENCODE_ZEN_API_KEY: "zen-k",
+        OPENCODE_HOME: home,
+      });
+      const { providerIds } = await materializeOpenCodeAuth(cfg);
+      assert.deepEqual(providerIds, [
+        OPENCODE_GO_PROVIDER_ID,
+        OPENCODE_ZEN_PROVIDER_ID,
+      ]);
+      const written = JSON.parse(
+        await readFile(resolveOpenCodeAuthPath(home), "utf8"),
+      ) as Record<string, { key: string }>;
+      assert.equal(written["opencode-go"]?.key, "go-k");
+      assert.equal(written.opencode?.key, "zen-k");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("requires at least one Go/Zen key when materializing", async () => {
     const cfg = loadConfig({});
     await assert.rejects(
       () => materializeOpenCodeAuth(cfg),
-      /OPENCODE_API_KEY is required/,
+      /OPENCODE_GO_API_KEY and\/or OPENCODE_ZEN_API_KEY/,
     );
   });
 });

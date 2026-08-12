@@ -101,11 +101,14 @@ LLM
 | `OPENCORE_API_TOKEN` | Client → runner Bearer |
 | `OPENCODE_ENABLED` | Expose `/v1/sessions/*` |
 | `OPENCODE_MANAGED` | Install + spawn serve at boot |
-| `OPENCODE_API_KEY` | **Required when managed** — OpenCode Go/Zen key → `auth.json` |
-| `OPENCODE_AUTH_PROVIDER` | auth.json provider id (default `opencode`) |
+| `OPENCODE_GO_API_KEY` | OpenCode **Go** → `opencode-go` in auth.json (set alone for Go-only catalog) |
+| `OPENCODE_ZEN_API_KEY` | OpenCode **Zen** → `opencode` in auth.json |
 | `OPENCODE_VERSION` / `PREFIX` / `UPDATE_*` | Managed install knobs |
 | `OPENCODE_BASE_URL` | OpenCode HTTP base |
 | `OPENCODE_SERVER_PASSWORD` | Optional Basic to serve (not the model key) |
+
+Managed mode needs **at least one** of `OPENCODE_GO_API_KEY` / `OPENCODE_ZEN_API_KEY`.
+Model list only includes providers you configured (same key string may be used in both).
 
 ## Test Agent Sessions
 
@@ -115,20 +118,20 @@ LLM
 export HOST_REPO=/absolute/path/to/your/git/repo
 export OPENCODE_ENABLED=true
 export OPENCODE_MANAGED=true
-export OPENCODE_API_KEY=oc-…   # dashboard API key (Secret / .env)
-export OPENCODE_DEFAULT_MODEL=opencode/big-pickle
+export OPENCODE_GO_API_KEY=oc-…   # Go subscription (or OPENCODE_ZEN_API_KEY for Zen)
+export OPENCODE_DEFAULT_MODEL=opencode-go/glm-5.1
 
 docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 ```
 
-Local process (same key, no auth mount):
+Local process (same keys, no auth mount):
 
 ```bash
 export OPENCODE_ENABLED=true
 export OPENCODE_MANAGED=true
-export OPENCODE_API_KEY=oc-…
+export OPENCODE_GO_API_KEY=oc-…
 export OPENCODE_PREFIX=$PWD/.opencode-prefix
-export OPENCODE_DEFAULT_MODEL=opencode/big-pickle
+export OPENCODE_DEFAULT_MODEL=opencode-go/glm-5.1
 npm start
 ```
 

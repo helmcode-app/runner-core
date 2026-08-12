@@ -7,7 +7,7 @@
  *   transport.ts  HTTP transport + errors
  *   runtime.ts    Managed install / serve lifecycle
  *   binary.ts     Binary path / package helpers
- *   auth.ts       Auth file materialization
+ *   auth.ts       Go/Zen API keys → auth.json (+ catalog allow-list)
  *   prompt.ts     Async prompt mapping
  *   mode.ts / model.ts  Composer → OpenCode fields
  */
@@ -36,9 +36,13 @@ export {
   type ManagedRuntimeState,
 } from "./runtime.js";
 export {
+  OPENCODE_GO_PROVIDER_ID,
+  OPENCODE_ZEN_PROVIDER_ID,
   buildOpenCodeAuthFile,
+  enabledOpenCodeProviderIds,
   materializeOpenCodeAuth,
   resolveOpenCodeAuthPath,
+  resolveOpenCodeAuthProviders,
   resolveOpenCodeHome,
   serializeOpenCodeAuthFile,
 } from "./auth.js";

@@ -43,7 +43,7 @@ Auth: `OPENCORE_API_TOKEN` as Bearer or Upgrade `?token=`.
 |------------|---------|
 | `OPENCORE_API_TOKEN` | HTTP + WebSockets |
 | `OPENCODE_*` | Sessions: managed install/serve |
-| `OPENCODE_API_KEY` | Required when managed — written to OpenCode `auth.json` |
+| `OPENCODE_GO_API_KEY` / `OPENCODE_ZEN_API_KEY` | At least one when managed — written to OpenCode `auth.json` as `opencode-go` / `opencode` |
 
 ## Develop
 

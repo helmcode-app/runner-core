@@ -2,7 +2,6 @@ package vfs
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -47,16 +46,14 @@ func ResolveGitRemote(root string) string {
 // Empty when not a git repo, git missing, or detached HEAD (HEAD is a commit).
 func ResolveGitBranch(root string) string {
 	// Prefer symbolic-ref so detached HEAD yields empty (not a short sha).
-	cmd := exec.Command("git", "-C", root, "symbolic-ref", "--short", "HEAD")
-	out, err := cmd.Output()
+	out, err := gitOutput(root, "symbolic-ref", "--short", "HEAD")
 	if err == nil {
 		if b := strings.TrimSpace(string(out)); b != "" {
 			return b
 		}
 	}
 	// Fallback: rev-parse --abbrev-ref HEAD (returns "HEAD" when detached).
-	cmd = exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD")
-	out, err = cmd.Output()
+	out, err = gitOutput(root, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return ""
 	}
@@ -68,8 +65,7 @@ func ResolveGitBranch(root string) string {
 }
 
 func gitOriginURL(root string) string {
-	cmd := exec.Command("git", "-C", root, "remote", "get-url", "origin")
-	out, err := cmd.Output()
+	out, err := gitOutput(root, "remote", "get-url", "origin")
 	if err != nil {
 		// No origin, not a git repo, or git missing — fall through.
 		return ""

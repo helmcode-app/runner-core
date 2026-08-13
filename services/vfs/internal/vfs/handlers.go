@@ -30,13 +30,15 @@ type writeParams struct {
 type handlerFunc func(s *Server, params json.RawMessage) (any, error)
 
 func defaultHandlers() map[string]handlerFunc {
-	return map[string]handlerFunc{
+	m := map[string]handlerFunc{
 		MethodInitialize: (*Server).handleInitialize,
 		MethodRead:       (*Server).handleRead,
 		MethodReadChunk:  (*Server).handleReadChunk,
 		MethodWrite:      (*Server).handleWrite,
 		MethodShutdown:   (*Server).handleShutdown,
 	}
+	registerGitHandlers(m)
+	return m
 }
 
 func (s *Server) handleInitialize(params json.RawMessage) (any, error) {

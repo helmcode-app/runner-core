@@ -9,6 +9,12 @@ import {
   type JsonRpcResponse,
   VFS_DEFAULT_CHUNK_LIMIT,
   type VfsDidChangeParams,
+  type VfsGitCheckoutResult,
+  type VfsGitDiffResult,
+  type VfsGitRefKind,
+  type VfsGitRefsResult,
+  type VfsGitShowResult,
+  type VfsGitStatusResult,
   type VfsInitializeResult,
   type VfsReadChunkResult,
   type VfsReadResult,
@@ -163,6 +169,44 @@ export class VfsBridge extends EventEmitter {
     return this.request<VfsWriteResult>(VfsMethod.Write, {
       path: filePath,
       content,
+    });
+  }
+
+  async gitStatus(): Promise<VfsGitStatusResult> {
+    return this.request<VfsGitStatusResult>(VfsMethod.GitStatus, {});
+  }
+
+  async gitRefs(): Promise<VfsGitRefsResult> {
+    return this.request<VfsGitRefsResult>(VfsMethod.GitRefs, {});
+  }
+
+  async gitDiff(
+    filePath: string,
+    staged: boolean = false,
+  ): Promise<VfsGitDiffResult> {
+    return this.request<VfsGitDiffResult>(VfsMethod.GitDiff, {
+      path: filePath,
+      staged,
+    });
+  }
+
+  async gitShow(
+    filePath: string,
+    revision: string = "HEAD",
+  ): Promise<VfsGitShowResult> {
+    return this.request<VfsGitShowResult>(VfsMethod.GitShow, {
+      path: filePath,
+      revision,
+    });
+  }
+
+  async gitCheckout(
+    ref: string,
+    kind: VfsGitRefKind,
+  ): Promise<VfsGitCheckoutResult> {
+    return this.request<VfsGitCheckoutResult>(VfsMethod.GitCheckout, {
+      ref,
+      kind,
     });
   }
 

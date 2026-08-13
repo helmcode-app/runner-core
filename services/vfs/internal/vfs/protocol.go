@@ -1,6 +1,7 @@
 package vfs
 
 // JSON-RPC method names (wire protocol). Keep in sync with services/runner/src/vfs/protocol.ts.
+// Git methods live in git_protocol.go.
 const (
 	MethodInitialize = "vfs/initialize"
 	MethodRead       = "vfs/read"

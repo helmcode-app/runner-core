@@ -1,7 +1,9 @@
 /**
- * VFS JSON-RPC method names and wire types.
- * Keep method strings in sync with services/vfs/internal/vfs/protocol.go.
+ * VFS JSON-RPC method names and core wire types.
+ * Git types: protocol-git.ts · Go: services/vfs/internal/vfs/protocol.go
  */
+
+import { VfsGitMethod } from "./protocol-git.js";
 
 export const VfsMethod = {
   Initialize: "vfs/initialize",
@@ -11,6 +13,7 @@ export const VfsMethod = {
   Write: "vfs/write",
   Shutdown: "vfs/shutdown",
   DidChange: "vfs/didChange",
+  ...VfsGitMethod,
 } as const;
 
 /** Default client chunk size (bytes); matches Go DefaultChunkLimit. */
@@ -106,3 +109,20 @@ export const JsonRpcCode = {
   InternalError: -32603,
   ServerError: -32000,
 } as const;
+
+export {
+  VfsGitMethod,
+  type VfsGitChangeEntry,
+  type VfsGitChangeStatus,
+  type VfsGitCheckoutParams,
+  type VfsGitCheckoutResult,
+  type VfsGitDiffParams,
+  type VfsGitDiffResult,
+  type VfsGitMethodName,
+  type VfsGitRefEntry,
+  type VfsGitRefKind,
+  type VfsGitRefsResult,
+  type VfsGitShowParams,
+  type VfsGitShowResult,
+  type VfsGitStatusResult,
+} from "./protocol-git.js";

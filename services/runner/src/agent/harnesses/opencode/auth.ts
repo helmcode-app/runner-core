@@ -14,7 +14,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AppConfig } from "../../../config.js";
 import type { Logger } from "../../../logger.js";
-import type { OpenCodeHarnessSettings } from "./settings.js";
+
+export interface OpenCodeHomeSettings {
+  home?: string;
+}
 
 /** Helm AGENT_PROVIDER values supported today. */
 export type AgentProviderId = "opencode-go" | "opencode-zen";
@@ -96,7 +99,7 @@ export function serializeOpenCodeAuthFile(file: OpenCodeAuthFile): string {
 
 /** Resolve OpenCode "home" for auth/config (not the npm install prefix). */
 export function resolveOpenCodeHome(
-  settings?: Pick<OpenCodeHarnessSettings, "home">,
+  settings?: OpenCodeHomeSettings,
 ): string {
   const explicit = settings?.home?.trim();
   if (explicit) return explicit;
@@ -117,12 +120,12 @@ export function resolveOpenCodeAuthPath(home: string): string {
 export async function materializeOpenCodeAuth(
   config: AppConfig,
   logger?: Logger,
-  settings?: Pick<OpenCodeHarnessSettings, "home">,
+  settings?: OpenCodeHomeSettings,
 ): Promise<{ authPath: string; providerIds: string[] }> {
   const slots = resolveOpenCodeAuthProviders(config);
   if (slots.length === 0) {
     throw new Error(
-      "AGENT_PROVIDER and AGENT_API_KEY are required when SESSIONS_ENABLED=true " +
+      "AGENT_PROVIDER and AGENT_API_KEY are required when AGENT_HARNESS=opencode " +
         "(e.g. AGENT_PROVIDER=opencode-go)",
     );
   }

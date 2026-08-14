@@ -21,9 +21,11 @@ src/
 │   └── open-core/             # server + routes
 ├── sessions/                  # Public /v1/sessions (Helm DTOs)
 ├── agent/                     # ACP Client, gateway, harness supervisors
-│   └── harnesses/             # ACP Server processes (default: opencode)
-│       ├── create.ts          # AGENT_HARNESS factory
-│       └── opencode/          # auth.json + `opencode acp`
+│   └── harnesses/             # ACP Server processes
+│       ├── create.ts          # AGENT_HARNESS → stdio supervisor
+│       ├── catalog.ts         # specs (provider policy, spawn, auth)
+│       ├── stdio.ts           # shared install + spawn
+│       └── opencode/          # auth.json only
 ├── terminal/                  # WebSSH: WS ↔ in-process PTY
 ├── vfs/                       # helm-vfs bridge + WS
 └── util/
@@ -45,7 +47,7 @@ Auth: `OPENCORE_API_TOKEN` as Bearer or Upgrade `?token=`.
 | Credential | Purpose |
 |------------|---------|
 | `OPENCORE_API_TOKEN` | HTTP + WebSockets |
-| `SESSIONS_ENABLED` / `AGENT_*` | Sessions: harness + LLM auth (install knobs in `agent/harnesses/*/settings.ts`) |
+| `SESSIONS_ENABLED` / `AGENT_*` | Sessions: harness + LLM auth (install knobs in `agent/harnesses/catalog.ts` + overlays) |
 
 ## Develop
 

@@ -2,6 +2,7 @@
 
 Stable HTTP/SSE surface for the iPad Commander. Runtime is an **ACP Client**
 talking to a harness **ACP Server**. Default: OpenCode (`opencode acp`).
+Other harnesses: [harnesses.md](./harnesses.md).
 
 ```
 iPad  ── /v1/sessions/* ──►  runner Agent Gateway  ──ACP/stdio──►  opencode acp
@@ -27,38 +28,72 @@ AGENT_API_KEY=oc-…
 AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 ```
 
-Harness install knobs are code defaults (`agent/harnesses/opencode/settings.ts`).
+Harness install knobs are catalog defaults + overlays (`agent/harnesses/`).
 
 HelmCode auth: `OPENCORE_API_TOKEN` Bearer (same as other `/v1/*` routes).
 
-Details: [OpenCode ACP harness](./opencode.md).
+Details: [OpenCode](./opencode.md), [all harnesses](./harnesses.md).
 
 ---
 
 ## Routes
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/v1/sessions/health` | Runtime liveness (`provider: "acp"`) |
-| `GET` | `/v1/sessions/models` | Configured models (`id` = `provider/model`) |
-| `GET` | `/v1/sessions/events` | SSE stream of `SessionStreamEvent` |
-| `POST` | `/v1/sessions` | Create session → `{ session }` |
-| `GET` | `/v1/sessions` | List → `{ sessions: AgentSession[] }` |
-| `GET` | `/v1/sessions/:id` | Get session |
-| `DELETE` | `/v1/sessions/:id` | Delete session |
-| `POST` | `/v1/sessions/:id/prompt` | Async prompt (**202** `PromptAccepted`) |
-| `GET` | `/v1/sessions/:id/history` | Timeline for offline rebuild |
-| `POST` | `/v1/sessions/:id/abort` | Cancel in-flight work |
-| `POST` | `/v1/sessions/:id/revert` | **501** until git checkpoints land |
-| `POST` | `/v1/sessions/:id/unrevert` | **501** until git checkpoints land |
-| `GET` | `/v1/sessions/:id/diff` | Empty list for now (git diffs planned) |
+REST + SSE for the iPad. Method names follow ACP session verbs; the wire
+format stays HTTP JSON (not ACP JSON-RPC).
+
+| Method | Path | ACP | Description |
+|--------|------|-----|-------------|
+| `GET` | `/v1/sessions/health` | — | Runtime liveness (`provider: "acp"`) |
+| `GET` | `/v1/sessions/models` | — | Catalog (`id` = `provider/model`) |
+| `GET` | `/v1/sessions/events` | `session/update` | SSE of `SessionStreamEvent` |
+| `POST` | `/v1/sessions` | `session/new` | Create → `{ session }` **201** |
+| `GET` | `/v1/sessions` | — | List → `{ sessions }` |
+| `GET` | `/v1/sessions/:id` | — | Get session |
+| `DELETE` | `/v1/sessions/:id` | `session/close` | Delete |
+| `POST` | `/v1/sessions/:id/prompt` | `session/prompt` | Async prompt **202** |
+| `GET` | `/v1/sessions/:id/history` | — | Timeline for reconnect |
+| `POST` | `/v1/sessions/:id/cancel` | `session/cancel` | Cancel in-flight turn |
+| `POST` | `/v1/sessions/:id/rewind` | — (product) | Rewind to a user-message checkpoint |
+
+ACP has no rewind. The gateway snapshots the git worktree before each prompt
+and, on rewind, truncates the Helm timeline, restores files, and replaces the
+ACP session (seeding the next prompt with prior turns).
+
+```json
+POST /v1/sessions/:id/rewind
+{ "messageId": "user_<uuid>", "restore": "both" }
+```
+
+`restore` is `both` (default), `conversation`, or `code`. The selected user
+message and everything after it are dropped. Response includes `prompt` (for
+the composer), `truncated`, `filesRestored`, and the remaining `entries`.
+
+File diffs / branch checkout stay on VFS (`vfs/gitDiff`, `vfs/gitCheckout`).
+
+### Models (`GET /v1/sessions/models`)
+
+```json
+{
+  "models": [
+    { "id": "opencode-go/glm-5.1", "name": "glm-5.1", "provider": "opencode-go", "connected": true }
+  ],
+  "connected": ["opencode-go"],
+  "defaultModel": "opencode-go/glm-5.1"
+}
+```
+
+`AgentSession` may include `modes` (ACP ids advertised at `session/new`).
 
 ### Create → prompt → events
+
+`POST /v1/sessions` may include `workspaceId` (default `default`). The session
+cwd, rewind snapshots, and `AgentSession.workspaceId` follow that workspace.
 
 1. `POST /v1/sessions` → ACP `session/new` → Helm `{ session }` (**201**)
 2. `POST …/prompt` → ACP `session/prompt` in background → **202**
 3. Live: `GET /v1/sessions/events` → Gateway SSE (`session.connected`, message/tool deltas, status)
 4. Reconnect: `GET …/history` then reopen events
+5. Stop: `POST …/cancel` → ACP `session/cancel`
 
 ---
 
@@ -68,5 +103,7 @@ Details: [OpenCode ACP harness](./opencode.md).
 |------|------|
 | `src/sessions/` | Product HTTP/SSE |
 | `src/agent/` | ACP client, gateway, permission / models |
-| `src/agent/harnesses/create.ts` | `AGENT_HARNESS` → runtime |
-| `src/agent/harnesses/opencode/` | Default ACP Server (`opencode acp`) |
+| `src/agent/harnesses/create.ts` | `AGENT_HARNESS` → stdio supervisor |
+| `src/agent/harnesses/catalog.ts` | Harness specs (provider policy, spawn, auth) |
+| `src/agent/harnesses/stdio.ts` | Shared ACP process manager |
+| `src/agent/harnesses/opencode/auth.ts` | OpenCode `auth.json` |

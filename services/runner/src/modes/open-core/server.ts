@@ -4,7 +4,7 @@ import {
   type AgentGateway,
   type AgentRuntime,
 } from "../../agent/index.js";
-import type { OpenCodeHarnessSettings } from "../../agent/harnesses/opencode/settings.js";
+import type { HarnessOverlay } from "../../agent/harnesses/stdio-settings.js";
 import type { AppConfig } from "../../config.js";
 import { sendJson } from "../../http/index.js";
 import type { Logger } from "../../logger.js";
@@ -16,6 +16,7 @@ import {
   createVfsGateway,
   type VfsGateway,
 } from "../../vfs/index.js";
+import { createWorkspaceRegistry } from "../../workspaces/index.js";
 import { handleOpenCoreRequest } from "./routes.js";
 
 export interface OpenCoreServer {
@@ -34,16 +35,17 @@ export interface OpenCoreServer {
 export interface StartOpenCoreOptions {
   installSignalHandlers?: boolean;
   /** Test/smoke overlay for harness install paths (not env). */
-  harnessOverlay?: Partial<OpenCodeHarnessSettings>;
+  harnessOverlay?: HarnessOverlay;
 }
 
 /**
  * Standalone HTTP + WebSocket API for iPad / local clients (HELM_MODE=open-core).
  *
  * Unified ingress (same host/port):
- * - `/v1/vfs`       — VFS JSON-RPC
- * - `/v1/terminal`  — WebSSH (in-process PTY)
- * - `/v1/sessions`  — agent sessions (ACP Client → harness ACP Server)
+ * - `/v1/workspaces` — workspace catalog (default = MAIN_REPO_PATH)
+ * - `/v1/vfs`        — VFS JSON-RPC (`?workspaceId=`)
+ * - `/v1/terminal`   — WebSSH (`?workspaceId=`)
+ * - `/v1/sessions`   — agent sessions (ACP Client → harness ACP Server)
  */
 export async function startOpenCore(
   config: AppConfig,
@@ -62,11 +64,12 @@ export async function startOpenCore(
     log.info("open-core API auth enabled (Bearer token)");
   }
 
-  const agentRuntime = createAgentRuntime(
-    config,
-    logger,
-    opts.harnessOverlay ? { harnessOverlay: opts.harnessOverlay } : undefined,
-  );
+  const workspaces = createWorkspaceRegistry(config);
+
+  const agentRuntime = createAgentRuntime(config, logger, {
+    workspaces,
+    ...(opts.harnessOverlay ? { harnessOverlay: opts.harnessOverlay } : {}),
+  });
   if (agentRuntime) {
     log.info("starting agent runtime", {
       harness: config.AGENT_HARNESS,
@@ -84,14 +87,20 @@ export async function startOpenCore(
     });
   }
 
-  let vfs: VfsGateway = { bridge: null, close: async () => undefined };
+  let vfs: VfsGateway = {
+    bridge: null,
+    pool: null,
+    getBridge: () => null,
+    close: async () => undefined,
+  };
 
   const server = createServer(async (req, res) => {
     try {
       await handleOpenCoreRequest(req, res, {
         config,
         apiToken,
-        getBridge: () => vfs.bridge,
+        getBridge: (workspaceId) => vfs.getBridge(workspaceId),
+        workspaces,
         agentGateway,
         logger,
       });
@@ -105,8 +114,8 @@ export async function startOpenCore(
     }
   });
 
-  vfs = await createVfsGateway(server, config, logger);
-  const terminal = createTerminalGateway(server, config, logger);
+  vfs = await createVfsGateway(server, config, logger, workspaces);
+  const terminal = createTerminalGateway(server, config, logger, workspaces);
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

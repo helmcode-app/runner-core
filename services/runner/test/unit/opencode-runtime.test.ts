@@ -2,39 +2,42 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   createHarnessRuntime,
-  openCodePackageSpec,
-  resolveOpenCodeBinaryPath,
-  resolveOpenCodeHarnessSettings,
+  defaultOpenCodePrefix,
+  harnessSpec,
+  npmPackageSpec,
+  resolveHarnessBinPath,
+  resolveStdioHarnessSettings,
 } from "../../src/agent/index.js";
 import { loadConfig } from "../../src/config.js";
 import { testLogger } from "../helpers.js";
 
 describe("OpenCode ACP harness settings", () => {
   it("resolves binary under overlay prefix", () => {
-    const settings = resolveOpenCodeHarnessSettings({
+    const settings = resolveStdioHarnessSettings(harnessSpec("opencode"), {
       prefix: "/data/opencode",
     });
     assert.equal(
-      resolveOpenCodeBinaryPath(settings),
+      resolveHarnessBinPath(settings),
       "/data/opencode/bin/opencode",
     );
   });
 
   it("bin overlay overrides prefix path", () => {
-    const settings = resolveOpenCodeHarnessSettings({
+    const settings = resolveStdioHarnessSettings(harnessSpec("opencode"), {
       prefix: "/data/opencode",
       bin: "/usr/local/bin/opencode",
     });
-    assert.equal(resolveOpenCodeBinaryPath(settings), "/usr/local/bin/opencode");
+    assert.equal(resolveHarnessBinPath(settings), "/usr/local/bin/opencode");
   });
 
-  it("uses code defaults (not env) for install knobs", () => {
-    const settings = resolveOpenCodeHarnessSettings();
+  it("uses catalog defaults (not env) for install knobs", () => {
+    const settings = resolveStdioHarnessSettings(harnessSpec("opencode"));
     assert.equal(settings.version, "latest");
     assert.equal(settings.updateIntervalHours, 24);
     assert.equal(settings.installTimeoutMs, 600_000);
     assert.equal(settings.packageName, "opencode-ai");
-    assert.ok(settings.prefix.length > 0);
+    assert.deepEqual(settings.args, ["acp"]);
+    assert.equal(settings.prefix, defaultOpenCodePrefix());
   });
 
   it("parses session selection env only", () => {
@@ -51,7 +54,7 @@ describe("OpenCode ACP harness settings", () => {
     assert.equal(createHarnessRuntime(cfg, testLogger()), null);
   });
 
-  it("createHarnessRuntime selects the OpenCode default", () => {
+  it("createHarnessRuntime selects OpenCode through the stdio supervisor", () => {
     const cfg = loadConfig({
       SESSIONS_ENABLED: "true",
       AGENT_HARNESS: "opencode",
@@ -60,10 +63,11 @@ describe("OpenCode ACP harness settings", () => {
     assert.ok(runtime);
     assert.equal(runtime.status.harness, "opencode");
     assert.equal(runtime.status.transport, "stdio");
+    assert.equal(runtime.modes.agent, "build");
   });
 
   it("builds npm package spec", () => {
-    assert.equal(openCodePackageSpec("latest"), "opencode-ai@latest");
-    assert.equal(openCodePackageSpec("1.2.3"), "opencode-ai@1.2.3");
+    assert.equal(npmPackageSpec("opencode-ai", "latest"), "opencode-ai@latest");
+    assert.equal(npmPackageSpec("opencode-ai", "1.2.3"), "opencode-ai@1.2.3");
   });
 });

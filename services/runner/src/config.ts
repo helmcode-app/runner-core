@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AGENT_HARNESS_IDS } from "./agent/harnesses/ids.js";
 import type { HelmMode } from "./types.js";
 import { envBool } from "./util/env.js";
 
@@ -51,18 +52,22 @@ const envSchema = z.object({
    */
   SESSIONS_ENABLED: envBool(false),
   /**
-   * Which ACP Server harness to run/connect.
-   * First supported: `opencode` (`opencode acp` over stdio).
-   * Install/spawn knobs live in `agent/harnesses/<name>/settings.ts`, not env.
+   * Which ACP Server harness to spawn.
+   * Multi-provider shells (`opencode`, later `pi` / `goose`) also need AGENT_PROVIDER.
+   * Single-vendor harnesses (`claude` / `codex` / `cursor` / `grok`) ignore AGENT_PROVIDER.
+   * Install/spawn knobs live in `agent/harnesses/`, not env.
    */
-  AGENT_HARNESS: z.enum(["opencode"]).default("opencode"),
+  AGENT_HARNESS: z.enum(AGENT_HARNESS_IDS).default("opencode"),
   /**
-   * LLM provider id for harness auth + model catalog allow-list.
-   * Known values: `opencode-go`, `opencode-zen` (OpenCode auth.json ids).
-   * Required with AGENT_API_KEY when SESSIONS_ENABLED=true.
+   * LLM vendor inside a multi-provider harness (OpenCode auth.json ids).
+   * Unused when AGENT_HARNESS is claude / codex / cursor / grok.
    */
   AGENT_PROVIDER: z.enum(["opencode-go", "opencode-zen"]).optional(),
-  /** API key for AGENT_PROVIDER (written to harness auth when sessions start). */
+  /**
+   * API key for the selected harness.
+   * OpenCode: written to auth.json for AGENT_PROVIDER.
+   * Single-vendor: injected as ANTHROPIC_API_KEY / CODEX_API_KEY / CURSOR_API_KEY / XAI_API_KEY.
+   */
   AGENT_API_KEY: z.string().optional(),
   /**
    * Default model string for prompts (e.g. `opencode-go/glm-5.1` or `opencode/big-pickle`).

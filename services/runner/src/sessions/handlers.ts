@@ -1,5 +1,5 @@
 /**
- * Session HTTP handlers (health, models, CRUD, prompt, history, abort, revert, diff).
+ * Session HTTP handlers (health, models, CRUD, prompt, history, cancel, rewind).
  * Dispatch lives in `routes.ts`. Backend: Agent Gateway (ACP).
  */
 
@@ -11,7 +11,7 @@ import type { Logger } from "../logger.js";
 import type {
   CreateSessionRequest,
   PromptRequest,
-  RevertSessionRequest,
+  RewindRequest,
   SessionHistoryResponse,
 } from "./types.js";
 
@@ -58,6 +58,7 @@ export async function handleCreate(
   const body = (await readJson(req).catch(() => ({}))) as CreateSessionRequest;
   const session = await ctx.gateway.createSession({
     ...(body.title !== undefined ? { title: body.title } : {}),
+    ...(body.workspaceId !== undefined ? { workspaceId: body.workspaceId } : {}),
   });
   ctx.logger.info("session created", { sessionId: session.id });
   sendJson(res, 201, { session });
@@ -140,49 +141,34 @@ export async function handleHistory(
   return true;
 }
 
-export async function handleAbort(
+export async function handleCancel(
   res: ServerResponse,
   ctx: SessionHandlerContext,
   sessionId: string,
 ): Promise<true> {
-  const aborted = await ctx.gateway.abort(sessionId);
-  sendJson(res, 200, { sessionId, aborted });
+  const cancelled = await ctx.gateway.cancel(sessionId);
+  sendJson(res, 200, { sessionId, cancelled });
   return true;
 }
 
-export async function handleRevert(
+export async function handleRewind(
   req: IncomingMessage,
   res: ServerResponse,
   ctx: SessionHandlerContext,
   sessionId: string,
 ): Promise<true> {
-  const body = (await readJson(req).catch(() => ({}))) as RevertSessionRequest;
-  const messageID = (body.messageId ?? body.messageID ?? "").trim();
-  if (!messageID) {
-    sendJson(res, 400, { error: "messageId is required" });
-    return true;
-  }
-  ctx.gateway.revert(sessionId, messageID);
-  return true;
-}
-
-export async function handleUnrevert(
-  res: ServerResponse,
-  ctx: SessionHandlerContext,
-  sessionId: string,
-): Promise<true> {
-  ctx.gateway.unrevert(sessionId);
-  return true;
-}
-
-export async function handleDiff(
-  req: IncomingMessage,
-  res: ServerResponse,
-  ctx: SessionHandlerContext,
-  sessionId: string,
-): Promise<true> {
-  void req;
-  const result = ctx.gateway.diff(sessionId);
+  const body = (await readJson(req).catch(() => ({}))) as RewindRequest;
+  const result = await ctx.gateway.rewind(sessionId, {
+    messageId: body.messageId ?? "",
+    restore: body.restore,
+  });
+  ctx.logger.info("session rewind", {
+    sessionId: result.sessionId,
+    messageId: result.messageId,
+    restore: result.restore,
+    truncated: result.truncated,
+    filesRestored: result.filesRestored,
+  });
   sendJson(res, 200, result);
   return true;
 }

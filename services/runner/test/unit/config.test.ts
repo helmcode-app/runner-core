@@ -78,4 +78,24 @@ describe("loadConfig", () => {
       /Invalid environment configuration/,
     );
   });
+
+  it("accepts single-vendor AGENT_HARNESS without AGENT_PROVIDER", () => {
+    const cfg = loadConfig({
+      AGENT_HARNESS: "cursor",
+      AGENT_API_KEY: "cursor-k",
+    });
+    assert.equal(cfg.AGENT_HARNESS, "cursor");
+    assert.equal(cfg.AGENT_PROVIDER, undefined);
+    assert.equal(cfg.AGENT_API_KEY, "cursor-k");
+  });
+
+  it("rejects unknown AGENT_HARNESS", () => {
+    assert.throws(
+      () =>
+        loadConfig({
+          AGENT_HARNESS: "goose",
+        }),
+      /Invalid environment configuration/,
+    );
+  });
 });

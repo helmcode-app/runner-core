@@ -29,6 +29,7 @@ Query parameters (on the WebSocket URL):
 |-------|---------|-------------|
 | `cols` | `80` | Initial columns |
 | `rows` | `24` | Initial rows |
+| `workspaceId` | `default` | Workspace cwd (see [workspaces.md](./workspaces.md)) |
 | `token` | — | Optional Bearer when `Authorization` cannot be set on Upgrade |
 
 ---

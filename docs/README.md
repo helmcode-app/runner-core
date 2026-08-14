@@ -7,7 +7,9 @@ Default agent path: **`/v1/sessions/*` → ACP Client → OpenCode ACP Server** 
 | Document | Description |
 |----------|-------------|
 | [Open-core HTTP API](./api/open-core.md) | Standalone server on `:8080` (`HELM_MODE=open-core`) |
+| [Workspaces](./api/workspaces.md) | Shared `workspaceId` for sessions / VFS / terminal |
 | [Agent sessions](./api/sessions.md) | Product `/v1/sessions/*` |
+| [ACP harnesses](./api/harnesses.md) | `AGENT_HARNESS` catalog (OpenCode + Claude / Codex / Cursor / Grok) |
 | [OpenCode ACP harness](./api/opencode.md) | Default ACP Server (internal) |
 | [ACP-first runtime](./design/acp-first-runtime.md) | Runner = ACP Client; harness = ACP Server |
 | [Goose (later)](./design/acp-and-goose.md) | Optional future harness — not the default proxy |

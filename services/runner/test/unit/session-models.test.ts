@@ -34,4 +34,17 @@ describe("agent models catalog", () => {
     assert.ok(catalog.models.some((m) => m.id === "opencode/other"));
     assert.deepEqual(catalog.connected, ["opencode"]);
   });
+
+  it("advertises the implied vendor for a single-vendor harness", async () => {
+    clearModelsCatalogCache();
+    const cfg = loadConfig({
+      AGENT_HARNESS: "claude",
+      AGENT_API_KEY: "k",
+      AGENT_DEFAULT_MODEL: "anthropic/claude-sonnet-4-6",
+    });
+    const catalog = await loadAgentModelsCatalog(cfg, { forceRefresh: true });
+    assert.ok(catalog.models.some((m) => m.id === "anthropic/claude-sonnet-4-6"));
+    assert.deepEqual(catalog.connected, ["anthropic"]);
+    assert.equal(catalog.defaultModel, "anthropic/claude-sonnet-4-6");
+  });
 });

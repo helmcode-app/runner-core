@@ -10,6 +10,7 @@ import type {
   AgentSession,
   PromptAccepted,
   PromptRequest,
+  RewindResponse,
   SessionMode,
   SessionStatus,
   SessionStreamEvent,
@@ -17,27 +18,36 @@ import type {
 } from "../sessions/types.js";
 import type { AcpConnection } from "./acp/connection.js";
 import {
-  AgentCapabilityError,
-  AgentNotFoundError,
-  AgentRuntimeError,
-} from "./errors.js";
+  captureWorkspaceCheckpoint,
+  restoreWorkspaceCheckpoint,
+} from "./checkpoint.js";
+import { AgentNotFoundError, AgentRuntimeError } from "./errors.js";
 import type { HarnessRuntime } from "./harnesses/types.js";
-import {
-  resolveOpenCodeHarnessSettings,
-  type OpenCodeHarnessSettings,
-} from "./harnesses/opencode/settings.js";
 import { mapAcpSessionUpdate, mapStopReason } from "./map-updates.js";
 import { loadAgentModelsCatalog, type ModelsCatalog } from "./models.js";
+import {
+  formatSeedContext,
+  parseRewindRestore,
+  planRewind,
+  type RewindRestore,
+  type SessionCheckpoint,
+} from "./rewind.js";
 import { resolveAgentSettings } from "./settings.js";
+import { type WorkspaceRegistry } from "../workspaces/index.js";
 
 export interface GatewaySessionRecord {
   helmId: string;
   acpSessionId: string;
+  cwd: string;
+  workspaceId: string;
   title?: string;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
   timeline: TimelineEntry[];
+  checkpoints: SessionCheckpoint[];
+  /** Injected once on the next prompt after a conversation rewind. */
+  seedContext?: string;
   /** ACP mode ids advertised by `session/new`. */
   availableModeIds: string[];
   /** In-flight prompt abort via ACP cancel. */
@@ -91,7 +101,7 @@ export class AgentGateway {
     private readonly logger: Logger,
     private readonly getConnection: () => AcpConnection,
     private readonly harness?: HarnessRuntime | null,
-    private readonly harnessSettings: OpenCodeHarnessSettings = resolveOpenCodeHarnessSettings(),
+    private readonly workspaces?: WorkspaceRegistry,
   ) {}
 
   /** ACP session/update → timeline + SSE. */
@@ -158,41 +168,30 @@ export class AgentGateway {
 
   async createSession(input?: {
     title?: string;
+    workspaceId?: string;
   }): Promise<AgentSession> {
-    const conn = this.getConnection();
-    const cwd = (
-      resolveAgentSettings().cwd?.trim() || this.config.MAIN_REPO_PATH
-    ).trim();
-    if (!cwd.startsWith("/")) {
-      throw new AgentRuntimeError(
-        `session cwd / MAIN_REPO_PATH must be absolute, got: ${cwd}`,
-        500,
-      );
-    }
+    const cwd = this.resolveSessionCwd(input?.workspaceId);
+    const workspaceId = this.resolveWorkspaceId(input?.workspaceId);
 
-    const created = await conn.request(acp.methods.agent.session.new, {
-      cwd,
-      mcpServers: [],
-    });
-
-    const availableModeIds = (created.modes?.availableModes ?? [])
-      .map((m) => m.id)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    const opened = await this.openAcpSession(cwd);
 
     const helmId = randomUUID();
     const now = new Date().toISOString();
     const record: GatewaySessionRecord = {
       helmId,
-      acpSessionId: created.sessionId,
+      acpSessionId: opened.acpSessionId,
+      cwd,
+      workspaceId,
       ...(input?.title !== undefined ? { title: input.title } : {}),
       status: "idle",
       createdAt: now,
       updatedAt: now,
       timeline: [],
-      availableModeIds,
+      checkpoints: [],
+      availableModeIds: opened.availableModeIds,
     };
     this.sessions.set(helmId, record);
-    this.byAcpId.set(created.sessionId, helmId);
+    this.byAcpId.set(opened.acpSessionId, helmId);
 
     await this.applyMode(record, "agent");
 
@@ -200,7 +199,7 @@ export class AgentGateway {
       type: "session.created",
       at: now,
       sessionId: helmId,
-      data: { acpSessionId: created.sessionId },
+      data: { acpSessionId: opened.acpSessionId },
     });
 
     return this.toAgentSession(record);
@@ -218,28 +217,7 @@ export class AgentGateway {
 
   async deleteSession(helmId: string): Promise<void> {
     const record = this.require(helmId);
-    const conn = this.getConnection();
-    try {
-      await conn.notify(acp.methods.agent.session.cancel, {
-        sessionId: record.acpSessionId,
-      });
-    } catch {
-      /* ignore */
-    }
-    try {
-      await conn.request(acp.methods.agent.session.close, {
-        sessionId: record.acpSessionId,
-      });
-    } catch {
-      // Some agents only support delete; try that next.
-      try {
-        await conn.request(acp.methods.agent.session.delete, {
-          sessionId: record.acpSessionId,
-        });
-      } catch {
-        /* best-effort */
-      }
-    }
+    await this.closeAcpSession(record.acpSessionId);
     this.byAcpId.delete(record.acpSessionId);
     this.sessions.delete(helmId);
     this.clearStreamBuffers(helmId);
@@ -271,8 +249,24 @@ export class AgentGateway {
     await this.applyMode(record, mode);
 
     const now = new Date().toISOString();
+    const userId = `user_${randomUUID()}`;
+    const snapshot = await captureWorkspaceCheckpoint(record.cwd).catch((err) => {
+      this.logger.debug("checkpoint capture skipped", {
+        sessionId: helmId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    });
+    const checkpoint: SessionCheckpoint = {
+      messageId: userId,
+      capturedAt: now,
+      prompt,
+      ...(snapshot?.tree ? { tree: snapshot.tree } : {}),
+    };
+    record.checkpoints.push(checkpoint);
+
     const userEntry: TimelineEntry = {
-      id: `user_${randomUUID()}`,
+      id: userId,
       at: now,
       kind: "message",
       role: "user",
@@ -301,6 +295,11 @@ export class AgentGateway {
     const content: Array<{ type: "text"; text: string }> = [
       { type: "text", text: prompt },
     ];
+    const seed = record.seedContext?.trim();
+    if (seed) {
+      content.unshift({ type: "text", text: seed });
+      delete record.seedContext;
+    }
     if (body.system?.trim()) {
       content.unshift({ type: "text", text: body.system.trim() });
     }
@@ -391,7 +390,7 @@ export class AgentGateway {
     };
   }
 
-  async abort(helmId: string): Promise<boolean> {
+  async cancel(helmId: string): Promise<boolean> {
     const record = this.require(helmId);
     record.promptAbort?.abort();
     try {
@@ -409,21 +408,101 @@ export class AgentGateway {
     return true;
   }
 
-  revert(_helmId: string, _messageId: string): never {
-    throw new AgentCapabilityError(
-      "revert is not available on ACP runtimes yet (git checkpoints planned)",
-    );
-  }
+  /**
+   * Rewind to a user message checkpoint. ACP has no rewind — conversation
+   * restore replaces the harness session and seeds the next prompt.
+   */
+  async rewind(
+    helmId: string,
+    input: { messageId: string; restore?: unknown },
+  ): Promise<RewindResponse> {
+    const record = this.require(helmId);
+    const restore: RewindRestore = parseRewindRestore(input.restore);
+    const plan = planRewind(record.timeline, record.checkpoints, input.messageId);
 
-  unrevert(_helmId: string): never {
-    throw new AgentCapabilityError(
-      "unrevert is not available on ACP runtimes yet",
-    );
-  }
+    if (record.status === "running") {
+      await this.cancel(helmId);
+    }
 
-  diff(_helmId: string): { sessionId: string; diffs: unknown[] } {
-    // Product git diffs come later; keep route stable with empty list.
-    return { sessionId: _helmId, diffs: [] };
+    const wantsCode = restore === "both" || restore === "code";
+    const wantsConversation = restore === "both" || restore === "conversation";
+
+    if (wantsCode && !plan.checkpoint.tree) {
+      if (restore === "code") {
+        throw new AgentRuntimeError(
+          "no file checkpoint for this message (workspace is not a git repo, or capture failed)",
+          409,
+        );
+      }
+    }
+
+    let filesRestored = false;
+    if (wantsCode && plan.checkpoint.tree) {
+      try {
+        await restoreWorkspaceCheckpoint(record.cwd, plan.checkpoint.tree);
+        filesRestored = true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (restore === "code") {
+          throw new AgentRuntimeError(`failed to restore files: ${message}`, 500);
+        }
+        this.logger.warn("rewind file restore failed", {
+          sessionId: helmId,
+          error: message,
+        });
+      }
+    }
+
+    if (wantsConversation) {
+      record.timeline = plan.kept;
+      record.checkpoints = plan.keptCheckpoints;
+      const seedContext = formatSeedContext(plan.kept);
+      if (seedContext) record.seedContext = seedContext;
+      else delete record.seedContext;
+      this.clearStreamBuffers(helmId);
+
+      const previousAcpId = record.acpSessionId;
+      this.byAcpId.delete(previousAcpId);
+      await this.closeAcpSession(previousAcpId);
+      const opened = await this.openAcpSession(record.cwd);
+      record.acpSessionId = opened.acpSessionId;
+      record.availableModeIds = opened.availableModeIds;
+      this.byAcpId.set(opened.acpSessionId, helmId);
+      await this.applyMode(record, "agent");
+    }
+
+    record.status = "idle";
+    record.updatedAt = new Date().toISOString();
+
+    this.emit({
+      type: "session.rewound",
+      at: record.updatedAt,
+      sessionId: helmId,
+      data: {
+        messageId: plan.checkpoint.messageId,
+        restore,
+        truncated: plan.removed.length,
+        filesRestored,
+        prompt: plan.checkpoint.prompt,
+      },
+    });
+    this.emit({
+      type: "session.status",
+      at: record.updatedAt,
+      sessionId: helmId,
+      data: { status: record.status },
+    });
+
+    return {
+      sessionId: helmId,
+      messageId: plan.checkpoint.messageId,
+      restore,
+      prompt: plan.checkpoint.prompt,
+      session: this.toAgentSession(record),
+      truncated: plan.removed.length,
+      filesRestored,
+      entries: record.timeline,
+    };
   }
 
   private finalizeTurn(
@@ -520,6 +599,72 @@ export class AgentGateway {
     }
   }
 
+  private resolveWorkspaceId(id?: string): string {
+    if (!this.workspaces) return "default";
+    return this.workspaces.get(id).id;
+  }
+
+  private resolveSessionCwd(workspaceId?: string): string {
+    const overlay = resolveAgentSettings().cwd?.trim();
+    if (overlay?.startsWith("/")) return overlay;
+    if (this.workspaces) {
+      const path = this.workspaces.get(workspaceId).path;
+      if (!path.startsWith("/")) {
+        throw new AgentRuntimeError(
+          `workspace path must be absolute, got: ${path}`,
+          500,
+        );
+      }
+      return path;
+    }
+    const cwd = this.config.MAIN_REPO_PATH.trim();
+    if (!cwd.startsWith("/")) {
+      throw new AgentRuntimeError(
+        `session cwd / MAIN_REPO_PATH must be absolute, got: ${cwd}`,
+        500,
+      );
+    }
+    return cwd;
+  }
+
+  private async openAcpSession(cwd: string): Promise<{
+    acpSessionId: string;
+    availableModeIds: string[];
+  }> {
+    const created = await this.getConnection().request(
+      acp.methods.agent.session.new,
+      { cwd, mcpServers: [] },
+    );
+    const availableModeIds = (created.modes?.availableModes ?? [])
+      .map((m) => m.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    return { acpSessionId: created.sessionId, availableModeIds };
+  }
+
+  private async closeAcpSession(acpSessionId: string): Promise<void> {
+    const conn = this.getConnection();
+    try {
+      await conn.notify(acp.methods.agent.session.cancel, {
+        sessionId: acpSessionId,
+      });
+    } catch {
+      /* ignore */
+    }
+    try {
+      await conn.request(acp.methods.agent.session.close, {
+        sessionId: acpSessionId,
+      });
+    } catch {
+      try {
+        await conn.request(acp.methods.agent.session.delete, {
+          sessionId: acpSessionId,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+
   private async applyMode(
     record: GatewaySessionRecord,
     mode: SessionMode,
@@ -527,7 +672,7 @@ export class AgentGateway {
     const modeId = pickAcpModeId(
       mode,
       record.availableModeIds,
-      this.harnessSettings.modes,
+      this.harness?.modes,
     );
     if (!modeId) return;
     try {
@@ -557,6 +702,10 @@ export class AgentGateway {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       backend: record.acpSessionId,
+      workspaceId: record.workspaceId,
+      ...(record.availableModeIds.length > 0
+        ? { modes: record.availableModeIds }
+        : {}),
     };
   }
 

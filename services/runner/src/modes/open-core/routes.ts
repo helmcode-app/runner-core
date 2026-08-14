@@ -7,11 +7,16 @@ import { handleSessionHttp } from "../../sessions/index.js";
 import type { HealthStatus } from "../../types.js";
 import { handleVfsHttp } from "../../vfs/index.js";
 import type { VfsBridge } from "../../vfs/index.js";
+import {
+  handleWorkspaceHttp,
+  type WorkspaceRegistry,
+} from "../../workspaces/index.js";
 
 export interface OpenCoreRouteContext {
   config: AppConfig;
   apiToken: string | undefined;
-  getBridge: () => VfsBridge | null;
+  getBridge: (workspaceId?: string | null) => VfsBridge | null;
+  workspaces: WorkspaceRegistry;
   /** ACP agent gateway when sessions are enabled. */
   agentGateway: AgentGateway | null;
   logger: Logger;
@@ -61,17 +66,34 @@ export async function handleOpenCoreRequest(
       authRequired: Boolean(ctx.apiToken),
       vfsEnabled: ctx.config.VFS_ENABLED,
       terminalEnabled: ctx.config.TERMINAL_ENABLED,
+      defaultWorkspaceId: ctx.workspaces.defaultId(),
     });
     return;
   }
 
   if (
-    await handleVfsHttp(req, res, method, url.pathname, {
-      config: ctx.config,
-      bridge: ctx.getBridge(),
-      sendJson,
-      readJson,
+    await handleWorkspaceHttp(req, res, method, url.pathname, {
+      workspaces: ctx.workspaces,
     })
+  ) {
+    return;
+  }
+
+  if (
+    await handleVfsHttp(
+      req,
+      res,
+      method,
+      url.pathname,
+      {
+        config: ctx.config,
+        workspaces: ctx.workspaces,
+        getBridge: ctx.getBridge,
+        sendJson,
+        readJson,
+      },
+      url.searchParams,
+    )
   ) {
     return;
   }

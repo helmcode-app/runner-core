@@ -8,6 +8,7 @@ import {
   AgentNotFoundError,
   AgentRuntimeError,
 } from "../agent/errors.js";
+import { WorkspaceNotFoundError } from "../workspaces/index.js";
 import { sendJson } from "../http/index.js";
 import type { Logger } from "../logger.js";
 
@@ -17,7 +18,7 @@ export function sendSessionError(
   err: unknown,
   log: Logger,
 ): true {
-  if (err instanceof AgentNotFoundError) {
+  if (err instanceof AgentNotFoundError || err instanceof WorkspaceNotFoundError) {
     sendJson(res, 404, { error: err.message });
     return true;
   }

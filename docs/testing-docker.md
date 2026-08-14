@@ -91,12 +91,14 @@ curl -s http://127.0.0.1:18080/v1/status | jq
 curl -s http://127.0.0.1:18080/v1/vfs/status | jq
 ```
 
-Agent sessions (optional — needs network for managed OpenCode install):
+Agent sessions (optional — needs network for the managed harness install):
 
 ```bash
 docker compose run --rm \
-  -e OPENCODE_ENABLED=true \
-  -e OPENCODE_MANAGED=true \
+  -e SESSIONS_ENABLED=true \
+  -e AGENT_HARNESS=opencode \
+  -e AGENT_PROVIDER=opencode-go \
+  -e AGENT_API_KEY=oc-… \
   -p 18080:8080 smoke
 
 curl -s http://127.0.0.1:18080/v1/sessions/health | jq
@@ -114,7 +116,7 @@ Notes:
 
 - Smoke seeds a **local** bare remote + clone (no GitHub).
 - Fixture dirs are Docker volumes; init **clears contents only** (never removes mount points).
-- Default smoke does **not** enable OpenCode; health/VFS still exercise the daemon.
+- Default smoke does **not** enable sessions; health/VFS still exercise the daemon.
 
 ## 4. What stays off the host
 

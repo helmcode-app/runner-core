@@ -1,6 +1,6 @@
 /**
- * Stable HelmCode agent-session DTOs (backend-agnostic).
- * OpenCode (or another harness) maps into these shapes at the gateway boundary.
+ * Product session DTOs over ACP (REST + SSE for iPad).
+ * Paths follow ACP session methods; JSON is Helm, not JSON-RPC.
  */
 
 /** Product execution intent (iPad composer). */
@@ -21,8 +21,12 @@ export interface AgentSession {
   status: SessionStatus;
   createdAt?: string;
   updatedAt?: string;
-  /** Opaque backend id if different from `id` (usually same). */
+  /** ACP session id when it differs from the Helm id. */
   backend?: string;
+  /** ACP `session/new` advertised mode ids (`build`, `plan`, …). */
+  modes?: string[];
+  /** Workspace this session edits (default `default` = MAIN_REPO_PATH). */
+  workspaceId?: string;
 }
 
 /** One node in the reconnectable timeline. */
@@ -65,6 +69,8 @@ export interface TimelineEntry {
 export interface CreateSessionRequest {
   title?: string;
   parentId?: string;
+  /** Bind to a workspace from GET /v1/workspaces. Omitted → `default`. */
+  workspaceId?: string;
 }
 
 export interface CreateSessionResponse {
@@ -101,29 +107,48 @@ export interface SessionHistoryResponse {
   entries: TimelineEntry[];
 }
 
-export interface AbortResponse {
+/** POST /v1/sessions/:id/cancel → ACP `session/cancel`. */
+export interface CancelResponse {
   sessionId: string;
-  aborted: boolean;
+  cancelled: boolean;
 }
 
-/** POST /v1/sessions/:id/revert body (camel or OpenCode casing). */
-export interface RevertSessionRequest {
-  messageId?: string;
-  messageID?: string;
-  partId?: string;
-  partID?: string;
+/**
+ * POST /v1/sessions/:id/rewind — product checkpoint rewind (not ACP).
+ * Default `restore` is `both` (conversation + workspace files).
+ */
+export type RewindRestore = "both" | "conversation" | "code";
+
+export interface RewindRequest {
+  /** User timeline id (`user_<uuid>`). That message and everything after are dropped. */
+  messageId: string;
+  restore?: RewindRestore;
 }
 
-export interface RevertSessionResponse {
+export interface RewindResponse {
   sessionId: string;
-  reverted?: boolean;
-  unreverted?: boolean;
-  session?: AgentSession;
+  messageId: string;
+  restore: RewindRestore;
+  /** Original user prompt, for the composer. */
+  prompt: string;
+  session: AgentSession;
+  /** Timeline rows removed (the target message and after). */
+  truncated: number;
+  filesRestored: boolean;
+  entries: TimelineEntry[];
 }
 
-export interface SessionDiffResponse {
-  sessionId: string;
-  diffs: unknown[];
+export interface SessionModel {
+  id: string;
+  name: string;
+  provider: string;
+  connected: boolean;
+}
+
+export interface SessionModelsResponse {
+  models: SessionModel[];
+  connected: string[];
+  defaultModel?: string;
 }
 
 export interface RuntimeHealthResponse {

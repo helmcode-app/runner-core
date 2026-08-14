@@ -39,8 +39,8 @@ services/runner (Node)
     └── vfs/               ──stdio JSON-RPC──► services/vfs (helm-vfs)
 ```
 
-**Agent product path:** `/v1/sessions/*` → Agent Gateway (ACP Client) → `opencode acp`.
-Model credentials live in the harness (`AGENT_PROVIDER` + `AGENT_API_KEY` → OpenCode auth.json).
+**Agent product path:** `/v1/sessions/*` → Agent Gateway (ACP Client) → harness ACP Server.
+Default harness is OpenCode. Single-vendor peers (`claude` / `codex` / `cursor` / `grok`) take `AGENT_HARNESS` + `AGENT_API_KEY` only.
 
 ## Quick start
 
@@ -78,11 +78,12 @@ docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 
 Full Docker notes: [`docs/testing-docker.md`](./docs/testing-docker.md).
 
-**OpenCode is not baked into the image.** When sessions are enabled the runner
-installs `opencode-ai` at boot (container: `/app/.opencode`; local: `~/.helm/opencode`)
-and runs `opencode acp`. First boot needs outbound network. Persist `/app/.opencode`
-(compose.dev volume `dev-opencode`) so restarts skip the download. Install knobs
-live in `services/runner/src/agent/harnesses/opencode/settings.ts`, not env.
+**Harness CLIs are not baked into the image.** When sessions are enabled the
+runner installs the catalog package at boot (OpenCode: `/app/.opencode` in
+the container, `~/.helm/opencode` locally; others: `/app/.helm/<id>`) and
+spawns the ACP command. First boot needs outbound network. Persist
+`/app/.opencode` and `/app/.helm` (compose.dev volumes) so restarts skip the
+download. Install knobs live in `agent/harnesses/catalog.ts` + overlays, not env.
 
 ## Credentials & agent (ACP)
 
@@ -103,13 +104,13 @@ LLM
 |----------|---------|
 | `OPENCORE_API_TOKEN` | Client → runner Bearer |
 | `SESSIONS_ENABLED` | Expose `/v1/sessions/*` and boot the harness ACP Server |
-| `AGENT_HARNESS` | ACP Server harness (`opencode`) |
-| `AGENT_PROVIDER` | LLM provider: `opencode-go` or `opencode-zen` |
-| `AGENT_API_KEY` | API key for `AGENT_PROVIDER` → OpenCode auth.json |
+| `AGENT_HARNESS` | ACP Server: `opencode` (default), `claude`, `codex`, `cursor`, `grok` |
+| `AGENT_PROVIDER` | LLM vendor **inside** a multi-provider shell (`opencode-go` / `opencode-zen`). Unused for claude/codex/cursor/grok |
+| `AGENT_API_KEY` | Key for that harness (OpenCode auth.json, or the product env var) |
 | `AGENT_DEFAULT_MODEL` | Default `provider/model` when prompt omits `model` |
 
-Sessions require `AGENT_PROVIDER` + `AGENT_API_KEY`.
-Install / permission / extra-model knobs are code overlays, not env.
+OpenCode sessions need `AGENT_PROVIDER` + `AGENT_API_KEY`. Single-vendor harnesses need `AGENT_API_KEY` only.
+Install / permission / extra-model knobs are code overlays, not env. See [docs/api/harnesses.md](./docs/api/harnesses.md).
 
 ## Test Agent Sessions
 
@@ -151,6 +152,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/sessions \
 |----------|-------------|
 | [docs/api/open-core.md](./docs/api/open-core.md) | open-core HTTP + auth |
 | [docs/api/sessions.md](./docs/api/sessions.md) | Agent sessions `/v1/sessions/*` |
+| [docs/api/harnesses.md](./docs/api/harnesses.md) | `AGENT_HARNESS` catalog |
 | [docs/api/opencode.md](./docs/api/opencode.md) | Default ACP Server (OpenCode) |
 | [docs/design/acp-first-runtime.md](./docs/design/acp-first-runtime.md) | ACP Client / Server layout |
 | [docs/design/acp-and-goose.md](./docs/design/acp-and-goose.md) | Goose as a later optional harness |

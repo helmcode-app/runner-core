@@ -33,7 +33,7 @@ Do not insert Goose between runner and OpenCode.
 ## Why OpenCode stays the default
 
 1. OpenCode already is a first-class ACP Server (`opencode acp`). Runner talks to it directly.
-2. Product features (Helm timeline, 202 prompt, revert/diff) live in the gateway, not in Goose.
+2. Product features (Helm timeline, 202 prompt, reconnect history) live in the gateway, not in Goose.
 3. VFS and terminal are iPad protocols; agents should reach the same backends via MCP if needed, not by replacing `/v1/vfs`.
 4. Goose ACP+ / extensions are powerful but not portable across harnesses.
 
@@ -41,21 +41,24 @@ Do not insert Goose between runner and OpenCode.
 
 ## How to add Goose later
 
-Same pattern as OpenCode — a peer harness, not a rewrite:
+Same catalog row as the other harnesses — not a rewrite and not a new supervisor:
 
-1. `services/runner/src/agent/harnesses/goose/` (settings overlay, spawn `goose acp`, auth/env)
-2. One arm in `harnesses/create.ts` for `AGENT_HARNESS=goose`
-3. Extend `config.ts` `AGENT_HARNESS` enum
-4. Keep `/v1/sessions/*` and `AgentGateway` unchanged
+1. Add `goose` to `agent/harnesses/ids.ts` (config enum follows)
+2. Add a `HARNESS_SPECS` row (`goose acp`, `providers: "required"`)
+3. Auth helper if Goose does not take a single env key (same idea as `opencode/auth.ts`)
+4. Optional `GOOSE_HARNESS_OVERLAY` in `stdio-settings.ts`
+5. Keep `/v1/sessions/*` and `AgentGateway` unchanged
 
-Env stays:
+Goose (and pi) are **multi-provider shells**, like OpenCode — both env vars matter:
 
 ```bash
 SESSIONS_ENABLED=true
 AGENT_HARNESS=goose          # instead of opencode
-AGENT_PROVIDER=…             # whatever that Goose install authenticates to
+AGENT_PROVIDER=…             # which LLM that Goose install authenticates to
 AGENT_API_KEY=…
 ```
+
+Claude / Codex / Cursor / Grok do **not** need `AGENT_PROVIDER` — the harness is the vendor. See [harnesses.md](../api/harnesses.md).
 
 Install knobs go in `harnesses/goose/settings.ts`, not a pile of `GOOSE_*` env vars.
 

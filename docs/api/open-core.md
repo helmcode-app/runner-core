@@ -20,6 +20,7 @@ Agent product API: [sessions.md](./sessions.md). VFS: [vfs.md](./vfs.md). Termin
 |--------|------|------|-------------|
 | `GET` | `/health` | no | Process liveness |
 | `GET` | `/v1/status` | yes* | Runtime status |
+| `*` | `/v1/workspaces*` | yes* | Workspace catalog (see [workspaces.md](./workspaces.md)) |
 | `*` | `/v1/sessions/*` | yes* | Agent sessions (see [sessions.md](./sessions.md)) |
 | `*` | `/v1/vfs/*` | yes* | VFS HTTP helpers (see [vfs.md](./vfs.md)) |
 
@@ -62,4 +63,5 @@ Agent product API: [sessions.md](./sessions.md). VFS: [vfs.md](./vfs.md). Termin
 }
 ```
 
-`agentHarness` is the ACP Server (`opencode` today). LLM vendor is `AGENT_PROVIDER`, not this field.
+`agentHarness` is the ACP Server (`opencode`, `claude`, `codex`, `cursor`, `grok`).  
+`AGENT_PROVIDER` is only the LLM vendor **inside** a multi-provider shell (OpenCode).

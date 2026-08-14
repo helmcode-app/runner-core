@@ -10,6 +10,10 @@ Agent Gateway (ACP Client)
    opencode acp   ← AGENT_HARNESS=opencode
 ```
 
+OpenCode uses the same stdio supervisor as Claude / Codex / Cursor / Grok.
+The only OpenCode-specific step is writing `auth.json`. See
+[harnesses.md](./harnesses.md).
+
 ---
 
 ## Enable
@@ -22,11 +26,15 @@ AGENT_API_KEY=…
 AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 ```
 
+OpenCode is a multi-provider shell: both `AGENT_HARNESS` and `AGENT_PROVIDER`
+are required. Claude / Codex / Cursor / Grok only need the harness + key.
+
 When sessions are on, runner installs `opencode-ai` (if missing) and spawns
 `opencode acp`. Install paths, version, update interval, and ACP mode ids
-are **code defaults** in
-`services/runner/src/agent/harnesses/opencode/settings.ts`
-(`OPENCODE_HARNESS_OVERLAY` for local overrides). Do not add `OPENCODE_*` env vars.
+are **catalog defaults** in `services/runner/src/agent/harnesses/catalog.ts`.
+Local overrides: `OPENCODE_HARNESS_OVERLAY` in
+`services/runner/src/agent/harnesses/stdio-settings.ts`.
+Do not add `OPENCODE_*` env vars.
 
 ### Boot sequence
 
@@ -63,4 +71,4 @@ Headless policy lives in `services/runner/src/agent/settings.ts`
 
 `GET /v1/sessions/health` → `{ ok, provider: "acp", harness: "opencode", managed: {…} }`.
 
-Code: `services/runner/src/agent/` + `harnesses/opencode/`.
+Code: `services/runner/src/agent/harnesses/` (`catalog.ts`, `stdio.ts`, `opencode/auth.ts`).

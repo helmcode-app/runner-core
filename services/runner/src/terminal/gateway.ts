@@ -8,6 +8,11 @@ import {
 } from "../http/index.js";
 import type { Logger } from "../logger.js";
 import { clampInt } from "../util/env.js";
+import {
+  parseWorkspaceId,
+  WorkspaceNotFoundError,
+  type WorkspaceRegistry,
+} from "../workspaces/index.js";
 import { spawnLocalPty } from "./local-pty.js";
 import { encodeServerMessage } from "./protocol.js";
 import { TerminalSession } from "./session.js";
@@ -29,7 +34,7 @@ export interface TerminalGateway {
  * WebSSH gateway: WebSocket ↔ in-process PTY (node-pty).
  *
  * No Docker socket. Shell runs in the runner process namespace with
- * cwd defaulting to MAIN_REPO_PATH / TERMINAL_WORKDIR.
+ * cwd from `?workspaceId=` (default workspace) or TERMINAL_WORKDIR overlay.
  *
  * Upgrade auth: Bearer + optional `?token=` (same OPENCORE_API_TOKEN).
  */
@@ -37,6 +42,7 @@ export function createTerminalGateway(
   server: Server,
   config: AppConfig,
   logger: Logger,
+  workspaces: WorkspaceRegistry,
 ): TerminalGateway {
   const log = logger.child({ component: "terminal-ws" });
   const enabled = config.TERMINAL_ENABLED;
@@ -54,8 +60,8 @@ export function createTerminalGateway(
   const wss = new WebSocketServer({ noServer: true });
   const sessions = new Set<TerminalSession>();
   const maxSessions = config.TERMINAL_MAX_SESSIONS;
-  const workdir = resolveWorkdir(
-    config.TERMINAL_WORKDIR || config.MAIN_REPO_PATH,
+  const defaultWorkdir = resolveWorkdir(
+    config.TERMINAL_WORKDIR || workspaces.get().path,
   );
 
   const onUpgrade = attachAuthenticatedUpgrade(server, {
@@ -75,6 +81,33 @@ export function createTerminalGateway(
   function openSession(ws: WebSocket, url: URL): void {
     const cols = clampInt(url.searchParams.get("cols"), 80, 1, 500);
     const rows = clampInt(url.searchParams.get("rows"), 24, 1, 200);
+    const workspaceId = parseWorkspaceId(url.searchParams.get("workspaceId"));
+    let workdir = defaultWorkdir;
+    try {
+      const workspace = workspaces.get(workspaceId);
+      workdir = resolveWorkdir(
+        workspace.id === "default" && config.TERMINAL_WORKDIR
+          ? config.TERMINAL_WORKDIR
+          : workspace.path,
+      );
+    } catch (err) {
+      const message =
+        err instanceof WorkspaceNotFoundError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      log.warn("terminal session rejected", { reason: "workspace", workspaceId });
+      if (ws.readyState === ws.OPEN) {
+        try {
+          ws.send(encodeServerMessage({ type: "error", message }));
+          ws.close(1008, "unknown workspace");
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
 
     if (sessions.size >= maxSessions) {
       const message = `Terminal session limit reached (${maxSessions}). Close another session and retry.`;
@@ -114,6 +147,7 @@ export function createTerminalGateway(
         sessionId: pty.sessionId,
         shell: pty.shell,
         cwd: pty.cwd,
+        workspaceId,
         cols,
         rows,
         active: sessions.size,
@@ -143,7 +177,7 @@ export function createTerminalGateway(
     alias: TERMINAL_WS_PATH_ALIAS,
     backend: "local-pty",
     shell: config.TERMINAL_SHELL,
-    workdir,
+    workdir: defaultWorkdir,
     maxSessions,
   });
 

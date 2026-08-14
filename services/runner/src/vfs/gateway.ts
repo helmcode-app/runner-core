@@ -1,4 +1,4 @@
-import type { Server } from "node:http";
+import type { IncomingMessage, Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AppConfig } from "../config.js";
 import {
@@ -6,82 +6,74 @@ import {
   closeWebSockets,
 } from "../http/index.js";
 import type { Logger } from "../logger.js";
+import {
+  DEFAULT_WORKSPACE_ID,
+  parseWorkspaceId,
+  WorkspaceNotFoundError,
+  type WorkspaceRegistry,
+} from "../workspaces/index.js";
 import { VfsBridge } from "./bridge.js";
+import { VfsBridgePool } from "./pool.js";
 import { JsonRpcCode, VfsMethod } from "./protocol.js";
 
 export const VFS_WS_PATH = "/v1/vfs";
 
 export interface VfsGateway {
+  /** Default-workspace bridge (boot-time). */
   bridge: VfsBridge | null;
+  pool: VfsBridgePool | null;
+  getBridge(workspaceId?: string | null): VfsBridge | null;
   close(): Promise<void>;
-}
-
-/** Start the helm-vfs child process (no WebSocket yet). */
-export async function startVfsBridge(
-  config: AppConfig,
-  logger: Logger,
-): Promise<VfsBridge | null> {
-  const log = logger.child({ component: "vfs-gateway" });
-  if (!config.VFS_ENABLED) {
-    log.info("VFS disabled (VFS_ENABLED=false)");
-    return null;
-  }
-
-  const bridge = new VfsBridge({
-    root: config.MAIN_REPO_PATH,
-    logger,
-    ...(config.HELM_VFS_BIN !== undefined
-      ? { binaryPath: config.HELM_VFS_BIN }
-      : {}),
-  });
-
-  try {
-    await bridge.start();
-    return bridge;
-  } catch (err) {
-    log.error("failed to start helm-vfs", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
 }
 
 /**
  * Attach WebSocket VFS gateway on `/v1/vfs`.
- * Client messages are JSON-RPC forwarded to helm-vfs; responses and
- * `vfs/didChange` notifications are pushed on the same socket.
+ * `?workspaceId=` selects the helm-vfs process (default `default`).
  */
 export function attachVfsWebSocket(
   server: Server,
-  bridge: VfsBridge,
+  pool: VfsBridgePool,
   config: AppConfig,
   logger: Logger,
 ): { close(): Promise<void> } {
   const log = logger.child({ component: "vfs-ws" });
   const apiToken = config.OPENCORE_API_TOKEN?.trim() || undefined;
   const wss = new WebSocketServer({ noServer: true });
-  const sockets = new Set<WebSocket>();
+  const sockets = new Map<WebSocket, { workspaceId: string }>();
 
-  const onDidChange = (params: unknown): void => {
+  const onDidChange = (workspaceId: string, params: unknown): void => {
     const note = JSON.stringify({
       jsonrpc: "2.0",
       method: VfsMethod.DidChange,
       params,
     });
     let sent = 0;
-    for (const ws of sockets) {
+    for (const [ws, meta] of sockets) {
+      if (meta.workspaceId !== workspaceId) continue;
       if (ws.readyState === ws.OPEN) {
         ws.send(note);
         sent += 1;
       }
     }
     log.info("broadcast vfs/didChange", {
+      workspaceId,
       clients: sockets.size,
       sent,
       params,
     });
   };
-  bridge.on("didChange", onDidChange);
+
+  const changeHandlers = new Map<string, (params: unknown) => void>();
+
+  const watchBridge = (workspaceId: string, bridge: VfsBridge): void => {
+    if (changeHandlers.has(workspaceId)) return;
+    const handler = (params: unknown): void => onDidChange(workspaceId, params);
+    changeHandlers.set(workspaceId, handler);
+    bridge.on("didChange", handler);
+  };
+
+  const defaultBridge = pool.get(DEFAULT_WORKSPACE_ID);
+  if (defaultBridge) watchBridge(DEFAULT_WORKSPACE_ID, defaultBridge);
 
   const onUpgrade = attachAuthenticatedUpgrade(server, {
     path: VFS_WS_PATH,
@@ -89,25 +81,53 @@ export function attachVfsWebSocket(
     apiToken,
   });
 
-  wss.on("connection", (ws: WebSocket) => {
-    sockets.add(ws);
-    log.info("vfs websocket connected", { clients: sockets.size });
+  wss.on("connection", (ws: WebSocket, _req: IncomingMessage, url: URL) => {
+    const workspaceId = parseWorkspaceId(url.searchParams.get("workspaceId"));
+    void (async () => {
+      try {
+        const bridge = await pool.ensure(workspaceId);
+        if (!bridge) {
+          ws.close(1013, "vfs unavailable");
+          return;
+        }
+        watchBridge(workspaceId, bridge);
+        sockets.set(ws, { workspaceId });
+        log.info("vfs websocket connected", {
+          workspaceId,
+          clients: sockets.size,
+        });
 
-    ws.on("message", (data) => {
-      void handleWsMessage(ws, bridge, data);
-    });
-
-    ws.on("close", () => {
-      sockets.delete(ws);
-      log.info("vfs websocket disconnected", { clients: sockets.size });
-    });
+        ws.on("message", (data) => {
+          void handleWsMessage(ws, bridge, data);
+        });
+        ws.on("close", () => {
+          sockets.delete(ws);
+          log.info("vfs websocket disconnected", {
+            workspaceId,
+            clients: sockets.size,
+          });
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn("vfs websocket rejected", { workspaceId, error: message });
+        const code = err instanceof WorkspaceNotFoundError ? 1008 : 1011;
+        try {
+          ws.close(code, message.slice(0, 120));
+        } catch {
+          /* ignore */
+        }
+      }
+    })();
   });
 
   return {
     close: async () => {
-      bridge.off("didChange", onDidChange);
+      for (const [workspaceId, handler] of changeHandlers) {
+        pool.get(workspaceId)?.off("didChange", handler);
+      }
+      changeHandlers.clear();
       server.off("upgrade", onUpgrade);
-      closeWebSockets(sockets);
+      closeWebSockets(sockets.keys());
       sockets.clear();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
@@ -164,17 +184,43 @@ export async function createVfsGateway(
   server: Server,
   config: AppConfig,
   logger: Logger,
+  workspaces: WorkspaceRegistry,
 ): Promise<VfsGateway> {
-  const bridge = await startVfsBridge(config, logger);
-  if (!bridge) {
-    return { bridge: null, close: async () => undefined };
+  if (!config.VFS_ENABLED) {
+    logger.child({ component: "vfs-gateway" }).info("VFS disabled (VFS_ENABLED=false)");
+    return {
+      bridge: null,
+      pool: null,
+      getBridge: () => null,
+      close: async () => undefined,
+    };
   }
-  const ws = attachVfsWebSocket(server, bridge, config, logger);
+
+  const pool = new VfsBridgePool(config, logger, workspaces);
+  try {
+    await pool.ensure(DEFAULT_WORKSPACE_ID);
+  } catch (err) {
+    logger.child({ component: "vfs-gateway" }).error("failed to start helm-vfs", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      bridge: null,
+      pool: null,
+      getBridge: () => null,
+      close: async () => undefined,
+    };
+  }
+
+  const ws = attachVfsWebSocket(server, pool, config, logger);
   return {
-    bridge,
+    get bridge() {
+      return pool.get(DEFAULT_WORKSPACE_ID);
+    },
+    pool,
+    getBridge: (workspaceId) => pool.get(parseWorkspaceId(workspaceId)),
     close: async () => {
       await ws.close();
-      await bridge.stop();
+      await pool.close();
     },
   };
 }

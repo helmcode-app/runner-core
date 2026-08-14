@@ -2,25 +2,20 @@
  * Models catalog for ACP agent gateway.
  *
  * Until harness provider discovery is wired, advertise configured
- * AGENT_DEFAULT_MODEL + agent settings extraModels (+ known placeholders).
+ * AGENT_DEFAULT_MODEL + extraModels + the connected provider for this harness.
  */
 
 import type { AppConfig } from "../config.js";
-import { enabledOpenCodeProviderIds } from "./harnesses/opencode/auth.js";
+import type {
+  SessionModel,
+  SessionModelsResponse,
+} from "../sessions/types.js";
+import { connectedProviderIds } from "./harnesses/catalog.js";
 import { resolveAgentSettings, type AgentSettings } from "./settings.js";
 
-export interface SessionModelInfo {
-  id: string;
-  name: string;
-  provider: string;
-  connected: boolean;
-}
-
-export interface ModelsCatalog {
-  models: SessionModelInfo[];
-  connected: string[];
-  defaultModel?: string;
-}
+export type { SessionModel, SessionModelsResponse };
+export type SessionModelInfo = SessionModel;
+export type ModelsCatalog = SessionModelsResponse;
 
 let cached: { at: number; catalog: ModelsCatalog } | null = null;
 const CACHE_MS = 30_000;
@@ -37,8 +32,8 @@ export async function loadAgentModelsCatalog(
     return cached.catalog;
   }
 
-  const connected = enabledOpenCodeProviderIds(config);
-  const models: SessionModelInfo[] = [];
+  const connected = connectedProviderIds(config);
+  const models: SessionModel[] = [];
   const seen = new Set<string>();
 
   const add = (id: string, connectedFlag: boolean): void => {

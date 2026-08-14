@@ -52,8 +52,8 @@ services:
       TERMINAL_WORKDIR: /app/main_repo
 
       # Sessions: opt-in via SESSIONS_ENABLED. Harness install knobs are
-      # code defaults (agent/harnesses/opencode/settings.ts), not env.
-      SESSIONS_ENABLED: ${SESSIONS_ENABLED:-false}
+      # catalog defaults + overlays, not env.
+      SESSIONS_ENABLED: ${SESSIONS_ENABLED:-true}
       AGENT_HARNESS: ${AGENT_HARNESS:-opencode}
     volumes:
       # ------------------------------------------------------------------
@@ -66,8 +66,9 @@ services:
       - ${HOST_REPO:?Set HOST_REPO to an absolute path of a local git repo}:/app/main_repo
       # Agent worktrees (do not bind-mount over the host repo)
       - dev-workspaces:/app/workspaces
-      # Persist managed OpenCode install across container recreates
+      # Persist managed harness installs across container recreates
       - dev-opencode:/app/.opencode
+      - dev-helm-harnesses:/app/.helm
     healthcheck:
       test:
         [
@@ -85,3 +86,4 @@ services:
 volumes:
   dev-workspaces:
   dev-opencode:
+  dev-helm-harnesses:

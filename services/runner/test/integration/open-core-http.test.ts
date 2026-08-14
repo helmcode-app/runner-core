@@ -70,6 +70,20 @@ describe("open-core HTTP API", () => {
     assert.match(body.error, /disabled/i);
   });
 
+  it("GET /v1/workspaces lists the primary workspace", async () => {
+    const res = await fetch(url("/v1/workspaces"));
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      defaultWorkspaceId: string;
+      workspaces: Array<{ id: string; kind: string; path: string }>;
+    };
+    assert.equal(body.defaultWorkspaceId, "default");
+    assert.equal(body.workspaces.length, 1);
+    assert.equal(body.workspaces[0]?.id, "default");
+    assert.equal(body.workspaces[0]?.kind, "primary");
+    assert.ok(body.workspaces[0]?.path);
+  });
+
   it("unknown path → 404", async () => {
     const res = await fetch(url("/v1/tasks"));
     assert.equal(res.status, 404);

@@ -19,13 +19,14 @@ VFS / git / terminal stay runner siblings. Agents may later attach the same back
 iPad ── /v1/sessions/* ──► Agent Gateway (ACP Client)
                               │  stdio ndjson
                               ▼
-                         opencode acp     ← AGENT_HARNESS=opencode (default)
+                         harness ACP     ← AGENT_HARNESS=opencode|claude|codex|cursor|grok
                               │
                               ▼
-                         LLM (AGENT_PROVIDER + AGENT_API_KEY)
+                         LLM (OpenCode: AGENT_PROVIDER + key; others: AGENT_API_KEY)
 
-         /v1/vfs*  → helm-vfs
-         /v1/terminal → in-process PTY
+         /v1/workspaces → catalog (`default` = MAIN_REPO_PATH)
+         /v1/vfs*?workspaceId=  → helm-vfs (one process per workspace)
+         /v1/terminal?workspaceId= → in-process PTY
 ```
 
 ---
@@ -34,17 +35,23 @@ iPad ── /v1/sessions/* ──► Agent Gateway (ACP Client)
 
 | Path | Role |
 |------|------|
-| `gateway.ts` | Helm session registry, timeline, SSE, prompt 202 |
+| `gateway.ts` | Helm session registry, timeline, SSE, prompt 202, rewind |
+| `checkpoint.ts` | git write-tree snapshot / read-tree restore |
+| `rewind.ts` | Timeline truncate + seed-context planning |
 | `acp/connection.ts` | ACP initialize + permission + `session/update` |
 | `map-updates.ts` | ACP updates → Helm timeline / SSE |
 | `settings.ts` | Product overlays (permission, extra models, cwd) |
-| `harnesses/create.ts` | `AGENT_HARNESS` → runtime factory |
+| `harnesses/create.ts` | `AGENT_HARNESS` → stdio supervisor |
+| `harnesses/catalog.ts` | Specs: provider policy, spawn, auth kind |
+| `harnesses/stdio.ts` | Shared install + `spawn` + ACP connect |
+| `harnesses/stdio-settings.ts` | Install overlays (`OPENCODE_HARNESS_OVERLAY`, …) |
+| `harnesses/opencode/auth.ts` | OpenCode `auth.json` only |
 | `harnesses/types.ts` | `HarnessRuntime` contract |
-| `harnesses/opencode/` | Default harness: auth.json, install, `opencode acp` |
 
 `sessions/` is the public HTTP/SSE package only. It must not import harness internals.
 
-Adding a harness = new `harnesses/<name>/` + a `switch` arm in `create.ts`. No new `/v1` routes.
+Adding a harness = id in `ids.ts` + a `HARNESS_SPECS` row. Env-key CLIs need
+no new process file. No new `/v1` routes.
 
 ---
 
@@ -54,8 +61,8 @@ Env is selection + secrets only:
 
 ```bash
 SESSIONS_ENABLED=true
-AGENT_HARNESS=opencode          # default ACP Server
-AGENT_PROVIDER=opencode-go      # LLM vendor for that harness
+AGENT_HARNESS=opencode          # or claude / codex / cursor / grok
+AGENT_PROVIDER=opencode-go      # only for multi-provider shells
 AGENT_API_KEY=…
 AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 ```
@@ -63,11 +70,12 @@ AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 | Env | Meaning |
 |-----|---------|
 | `AGENT_HARNESS` | Which ACP Server process to spawn |
-| `AGENT_PROVIDER` | Which LLM that process authenticates to |
-| `AGENT_API_KEY` | Key for `AGENT_PROVIDER` |
+| `AGENT_PROVIDER` | LLM vendor **inside** OpenCode (later pi / goose). Unused for single-vendor harnesses |
+| `AGENT_API_KEY` | Key for that harness |
 | `AGENT_DEFAULT_MODEL` | Default `provider/model` on prompt |
 
-Install paths, version, update interval, ACP mode ids: `harnesses/opencode/settings.ts` (`OPENCODE_HARNESS_OVERLAY`).  
+Install paths, version, update interval, ACP mode ids: `harnesses/catalog.ts`
+plus overlays (`OPENCODE_HARNESS_OVERLAY`, `CLAUDE_HARNESS_OVERLAY`, …).
 Permission / extra models / cwd: `agent/settings.ts` (`AGENT_SETTINGS_OVERLAY`).
 
 ---
@@ -78,12 +86,16 @@ Permission / extra models / cwd: `agent/settings.ts` (`AGENT_SETTINGS_OVERLAY`).
 Create   POST /v1/sessions     → acp.session/new → Helm id + ACP id
 Prompt   POST …/prompt         → 202; acp.session/prompt in background
 Events   GET  …/events         → Gateway SSE from session/update
-Cancel   POST …/abort          → acp.session/cancel (notification)
-History  GET  …/history        → Gateway timeline
+Cancel   POST …/cancel         → acp.session/cancel (notification)
+Rewind   POST …/rewind         → Gateway checkpoint (not ACP)
+History  GET  …/history        → Gateway timeline (product reconnect)
 Delete   DELETE …              → acp.session/close
 ```
 
-Revert / diff are product git checkpoints (not ACP). Routes return **501** until that lands.
+iPad stays on REST + SSE. Runner is the ACP Client; do not expose JSON-RPC
+to the app. Branch checkout / file diffs stay on VFS. **Turn rewind** is a
+Gateway product feature: snapshot the git tree before each prompt, then
+truncate timeline + restore files + replace the ACP session.
 
 ---
 
@@ -94,7 +106,7 @@ Revert / diff are product git checkpoints (not ACP). Routes return **501** until
 | Agent abstraction | ACP (Runner = Client, harness = Server) |
 | Default harness | **OpenCode ACP** (`opencode acp`) |
 | Multi-harness bus | Direct ACP per harness — not Goose-in-the-middle |
-| Goose | Later `AGENT_HARNESS=goose` (optional peer) |
+| Goose / pi | Later multi-provider peers — need both `AGENT_HARNESS` and `AGENT_PROVIDER` |
 | Product API | Keep `/v1/sessions/*` |
 | VFS / terminal | Runner siblings; optional MCP later |
 | OpenCode HTTP (`opencode serve`) | Removed |

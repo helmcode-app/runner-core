@@ -1,11 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AppConfig } from "../config.js";
+import {
+  parseWorkspaceId,
+  WorkspaceNotFoundError,
+  type WorkspaceRegistry,
+} from "../workspaces/index.js";
 import type { VfsBridge } from "./bridge.js";
 import { JsonRpcCode } from "./protocol.js";
 
 export interface VfsHttpContext {
   config: AppConfig;
-  bridge: VfsBridge | null;
+  workspaces: WorkspaceRegistry;
+  getBridge: (workspaceId?: string | null) => VfsBridge | null;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
   readJson: (req: IncomingMessage) => Promise<unknown>;
 }
@@ -22,16 +28,30 @@ export async function handleVfsHttp(
   method: string,
   pathname: string,
   ctx: VfsHttpContext,
+  searchParams?: URLSearchParams,
 ): Promise<boolean> {
+  const workspaceId = parseWorkspaceId(searchParams?.get("workspaceId"));
+
   if (method === "POST" && pathname === "/v1/vfs/rpc") {
-    if (!ctx.bridge) {
+    let bridge: VfsBridge | null;
+    try {
+      ctx.workspaces.get(workspaceId);
+      bridge = ctx.getBridge(workspaceId);
+    } catch (err) {
+      if (err instanceof WorkspaceNotFoundError) {
+        ctx.sendJson(res, 404, { error: err.message });
+        return true;
+      }
+      throw err;
+    }
+    if (!bridge) {
       ctx.sendJson(res, 503, { error: "vfs unavailable" });
       return true;
     }
     const body = await ctx.readJson(req);
     const id = extractId(body);
     try {
-      const result = await ctx.bridge.forward(body);
+      const result = await bridge.forward(body);
       ctx.sendJson(res, 200, {
         jsonrpc: "2.0",
         id: id ?? null,
@@ -51,10 +71,21 @@ export async function handleVfsHttp(
   }
 
   if (method === "GET" && pathname === "/v1/vfs/status") {
+    let workspace;
+    try {
+      workspace = ctx.workspaces.get(workspaceId);
+    } catch (err) {
+      if (err instanceof WorkspaceNotFoundError) {
+        ctx.sendJson(res, 404, { error: err.message });
+        return true;
+      }
+      throw err;
+    }
     ctx.sendJson(res, 200, {
       enabled: ctx.config.VFS_ENABLED,
-      running: Boolean(ctx.bridge?.isRunning),
-      root: ctx.config.MAIN_REPO_PATH,
+      running: Boolean(ctx.getBridge(workspaceId)?.isRunning),
+      workspaceId: workspace.id,
+      root: workspace.path,
       ws: "/v1/vfs",
       rpc: "/v1/vfs/rpc",
     });

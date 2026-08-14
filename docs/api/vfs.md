@@ -15,7 +15,7 @@ Node.js `services/runner/src/vfs` spawns the binary and multiplexes newline-deli
 | Layer | Channel |
 |-------|---------|
 | Go process | stdin requests · stdout responses + notifications · stderr logs |
-| open-core WebSocket | `ws://host:port/v1/vfs` (Bearer auth when configured) |
+| open-core WebSocket | `ws://host:port/v1/vfs?workspaceId=default` (Bearer auth when configured) |
 | open-core HTTP fallback | `POST /v1/vfs/rpc` |
 | Status | `GET /v1/vfs/status` |
 

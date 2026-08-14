@@ -1,42 +1,52 @@
 /**
- * Managed OpenCode ACP harness: install binary, spawn `opencode acp`, ACP stdio.
+ * Managed stdio ACP supervisor for every catalog harness.
+ *
+ * npm-installable adapters go into `$prefix`. PATH-only CLIs (Cursor)
+ * resolve `agent` / `cursor-agent`. OpenCode writes auth.json first,
+ * then uses the same install + spawn path as Claude / Codex / Grok.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-import type { AppConfig } from "../../../config.js";
-import type { Logger } from "../../../logger.js";
-import { runCommand } from "../../../util/process.js";
+import type { AppConfig } from "../../config.js";
+import type { Logger } from "../../logger.js";
+import { runCommand } from "../../util/process.js";
 import {
   connectAcpClient,
   type AcpConnection,
   type SessionUpdateHandler,
-} from "../../acp/connection.js";
-import { AgentRuntimeError } from "../../errors.js";
-import { materializeOpenCodeAuth, resolveOpenCodeHome } from "./auth.js";
+} from "../acp/connection.js";
+import { AgentRuntimeError } from "../errors.js";
 import {
+  type AgentHarnessId,
+  childAuthEnv,
+  harnessSpec,
+  type HarnessSpec,
+} from "./catalog.js";
+import {
+  findOnPath,
+  installNpmPackage,
   isExecutable,
   isFloatingTag,
-  openCodePackageSpec,
+  npmPackageSpec,
   pathExists,
-  resolveOpenCodeBinaryPath,
+  resolveHarnessBinPath,
   sleep,
-} from "./binary.js";
-import type { HarnessRuntime } from "../types.js";
+} from "./install.js";
 import {
-  resolveOpenCodeHarnessSettings,
-  type OpenCodeHarnessSettings,
-} from "./settings.js";
+  materializeOpenCodeAuth,
+  resolveOpenCodeHome,
+} from "./opencode/auth.js";
+import {
+  resolveStdioHarnessSettings,
+  type HarnessOverlay,
+  type StdioHarnessSettings,
+} from "./stdio-settings.js";
+import type { HarnessModeIds, HarnessRuntime, HarnessStatus } from "./types.js";
 
-export {
-  openCodePackageSpec,
-  resolveOpenCodeBinaryPath,
-} from "./binary.js";
-
-export type ManagedHarnessState =
+export type ManagedStdioState =
   | "idle"
   | "installing"
   | "starting"
@@ -45,27 +55,20 @@ export type ManagedHarnessState =
   | "stopped"
   | "error";
 
-export interface ManagedOpenCodeAcpStatus {
-  state: ManagedHarnessState;
+export interface ManagedStdioAcpStatus extends HarnessStatus {
+  state: ManagedStdioState;
   managed: true;
-  harness: "opencode";
   transport: "stdio";
-  version?: string;
   desiredVersion: string;
-  binaryPath: string;
-  protocolVersion?: number;
-  agentName?: string;
-  error?: string;
   lastInstallAt?: string;
   lastUpdateCheckAt?: string;
 }
 
-/** Default ACP Server: install + spawn `opencode acp`. */
-export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
+export class ManagedStdioAcpRuntime implements HarnessRuntime {
   private child: ChildProcess | null = null;
   private connection: AcpConnection | null = null;
   private updateTimer: NodeJS.Timeout | null = null;
-  private state: ManagedHarnessState = "idle";
+  private state: ManagedStdioState = "idle";
   private lastError: string | undefined;
   private installedVersion: string | undefined;
   private lastInstallAt: string | undefined;
@@ -73,21 +76,27 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
   private stopping = false;
   private op: Promise<void> = Promise.resolve();
   private onSessionUpdate: SessionUpdateHandler = () => undefined;
+  private resolvedBin: string | undefined;
 
   constructor(
     private readonly config: AppConfig,
     private readonly logger: Logger,
-    private readonly settings: OpenCodeHarnessSettings,
+    private readonly spec: HarnessSpec,
+    private readonly settings: StdioHarnessSettings,
   ) {}
 
-  get status(): ManagedOpenCodeAcpStatus {
-    const status: ManagedOpenCodeAcpStatus = {
+  get modes(): HarnessModeIds {
+    return this.settings.modes;
+  }
+
+  get status(): ManagedStdioAcpStatus {
+    const status: ManagedStdioAcpStatus = {
       state: this.state,
       managed: true,
-      harness: "opencode",
+      harness: this.spec.id,
       transport: "stdio",
       desiredVersion: this.settings.version,
-      binaryPath: resolveOpenCodeBinaryPath(this.settings),
+      binaryPath: this.resolvedBin ?? this.preferredBinPath(),
     };
     if (this.installedVersion !== undefined) {
       status.version = this.installedVersion;
@@ -108,7 +117,6 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
     return status;
   }
 
-  /** Wire ACP session/update fan-out before start(). */
   setSessionUpdateHandler(handler: SessionUpdateHandler): void {
     this.onSessionUpdate = handler;
   }
@@ -123,7 +131,7 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
   async start(): Promise<void> {
     await this.serialize(async () => {
       this.stopping = false;
-      await materializeOpenCodeAuth(this.config, this.logger, this.settings);
+      await this.prepareAuth();
       await this.ensureInstalled("boot");
       await this.startAcp();
       this.scheduleUpdates();
@@ -139,10 +147,19 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
     });
   }
 
-  async checkForUpdate(): Promise<void> {
-    await this.serialize(async () => {
-      await this.runUpdateCycle();
-    });
+  private async prepareAuth(): Promise<void> {
+    if (this.spec.auth === "opencode-json") {
+      await materializeOpenCodeAuth(this.config, this.logger, this.settings);
+      return;
+    }
+    if (!this.settings.requireApiKey) return;
+    if (this.config.AGENT_API_KEY?.trim()) return;
+    const dest = this.spec.apiKeyEnv ?? "the harness process";
+    throw new Error(
+      `AGENT_API_KEY is required for AGENT_HARNESS=${this.spec.id} ` +
+        `(injected as ${dest}). AGENT_PROVIDER is unused for this harness. ` +
+        `Set requireApiKey: false on the harness overlay to reuse a local CLI login.`,
+    );
   }
 
   private serialize(fn: () => Promise<void>): Promise<void> {
@@ -163,15 +180,16 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
 
   private scheduleUpdates(): void {
     this.clearUpdateTimer();
+    if (!this.settings.packageName) return;
     const hours = this.settings.updateIntervalHours;
     if (hours <= 0) {
-      this.logger.info("opencode periodic update disabled", {
+      this.logger.info(`${this.spec.id} periodic update disabled`, {
         intervalHours: hours,
       });
       return;
     }
     const ms = hours * 60 * 60 * 1000;
-    this.logger.info("opencode periodic update scheduled", {
+    this.logger.info(`${this.spec.id} periodic update scheduled`, {
       intervalHours: hours,
     });
     this.updateTimer = setInterval(() => {
@@ -180,7 +198,7 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
         try {
           await this.runUpdateCycle();
         } catch (err) {
-          this.logger.warn("opencode periodic update failed", {
+          this.logger.warn(`${this.spec.id} periodic update failed`, {
             error: err instanceof Error ? err.message : String(err),
           });
         }
@@ -189,69 +207,73 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
     this.updateTimer.unref();
   }
 
-  private async ensureInstalled(reason: "boot" | "update"): Promise<void> {
-    const prefix = this.settings.prefix;
-    const bin = resolveOpenCodeBinaryPath(this.settings);
-    const spec = openCodePackageSpec(
-      this.settings.version,
-      this.settings.packageName,
-    );
-    const already = await isExecutable(bin);
+  private preferredBinPath(): string {
+    return resolveHarnessBinPath(this.settings);
+  }
 
-    if (reason === "boot" && already) {
-      this.installedVersion = await this.readBinaryVersion(bin);
-      this.logger.info("opencode binary present", {
-        bin,
+  private async resolveBinary(): Promise<string> {
+    if (this.settings.bin?.trim()) {
+      return this.settings.bin.trim();
+    }
+    const prefixed = path.join(this.settings.prefix, "bin", this.settings.binName);
+    if (await isExecutable(prefixed)) return prefixed;
+    const fromPath = findOnPath(this.settings.pathCandidates);
+    if (fromPath) return fromPath;
+    return prefixed;
+  }
+
+  private async ensureInstalled(reason: "boot" | "update"): Promise<void> {
+    this.resolvedBin = await this.resolveBinary();
+    const already = await isExecutable(this.resolvedBin);
+
+    if (already && (reason === "boot" || !this.settings.packageName)) {
+      this.installedVersion = await this.readBinaryVersion(this.resolvedBin);
+      this.logger.info(`${this.spec.id} binary present`, {
+        bin: this.resolvedBin,
         version: this.installedVersion,
         desired: this.settings.version,
       });
       return;
     }
 
+    if (!this.settings.packageName) {
+      const tried = this.settings.pathCandidates.join(", ");
+      this.state = "error";
+      this.lastError = `binary missing: ${this.resolvedBin} (PATH: ${tried})`;
+      throw new Error(
+        `${this.spec.id} CLI not found. Install it or set the harness overlay \`bin\`. ` +
+          `Looked for: ${tried}`,
+      );
+    }
+
     this.state = reason === "update" ? "updating" : "installing";
     this.lastError = undefined;
-    await mkdir(prefix, { recursive: true });
-
-    this.logger.info("installing opencode", {
+    const spec = npmPackageSpec(this.settings.packageName, this.settings.version);
+    this.logger.info(`installing ${this.spec.id}`, {
       reason,
       spec,
-      prefix,
+      prefix: this.settings.prefix,
       npm: this.settings.npmBin,
     });
 
-    const result = await runCommand(
-      this.settings.npmBin,
-      ["install", "-g", "--prefix", prefix, spec],
-      {
-        cwd: prefix,
-        timeoutMs: this.settings.installTimeoutMs,
-        maxOutputChars: 256 * 1024,
-        env: {
-          npm_config_update_notifier: "false",
-          npm_config_fund: "false",
-          npm_config_audit: "false",
-        },
-      },
-    );
+    const result = await installNpmPackage({
+      npmBin: this.settings.npmBin,
+      prefix: this.settings.prefix,
+      spec,
+      timeoutMs: this.settings.installTimeoutMs,
+    });
 
-    if (result.exitCode !== 0) {
-      const detail =
-        result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`;
+    this.resolvedBin = path.join(this.settings.prefix, "bin", this.settings.binName);
+    if (!(await isExecutable(this.resolvedBin))) {
       this.state = "error";
-      this.lastError = detail;
-      throw new Error(`Failed to install ${spec}: ${detail}`);
-    }
-
-    if (!(await isExecutable(bin))) {
-      this.state = "error";
-      this.lastError = `binary missing after install: ${bin}`;
+      this.lastError = `binary missing after install: ${this.resolvedBin}`;
       throw new Error(this.lastError);
     }
 
-    this.installedVersion = await this.readBinaryVersion(bin);
+    this.installedVersion = await this.readBinaryVersion(this.resolvedBin);
     this.lastInstallAt = new Date().toISOString();
-    this.logger.info("opencode installed", {
-      bin,
+    this.logger.info(`${this.spec.id} installed`, {
+      bin: this.resolvedBin,
       version: this.installedVersion,
       durationMs: result.durationMs,
     });
@@ -277,26 +299,29 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
       return;
     }
 
-    const bin = resolveOpenCodeBinaryPath(this.settings);
+    const bin = this.resolvedBin ?? (await this.resolveBinary());
     if (!(await pathExists(bin))) {
-      throw new Error(`opencode binary not found: ${bin}`);
+      throw new Error(`${this.spec.id} binary not found: ${bin}`);
     }
+    this.resolvedBin = bin;
 
     this.state = "starting";
-    const home = resolveOpenCodeHome(this.settings);
-    const workDir = this.config.MAIN_REPO_PATH || home;
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: home,
-    };
+    const env = childAuthEnv(this.config, this.spec);
+    if (this.spec.auth === "opencode-json") {
+      env.HOME = resolveOpenCodeHome(this.settings);
+    } else if (this.settings.home?.trim()) {
+      env.HOME = this.settings.home.trim();
+    }
+    const workDir = this.config.MAIN_REPO_PATH.trim() || env.HOME || process.cwd();
 
-    this.logger.info("starting opencode acp", {
+    this.logger.info(`starting ${this.spec.id} acp`, {
       bin,
-      home,
+      args: this.settings.args,
       cwd: workDir,
+      apiKeyEnv: this.spec.apiKeyEnv,
     });
 
-    const child = spawn(bin, ["acp"], {
+    const child = spawn(bin, this.settings.args, {
       env,
       cwd: workDir,
       stdio: ["pipe", "pipe", "pipe"],
@@ -307,7 +332,7 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
       for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-        this.logger.info("opencode acp", { stream: "stderr", line });
+        this.logger.info(`${this.spec.id} acp`, { stream: "stderr", line });
       }
     });
 
@@ -315,7 +340,10 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
       if (this.child === child) this.child = null;
       this.connection = null;
       if (this.stopping) return;
-      this.logger.error("opencode acp exited unexpectedly", { code, signal });
+      this.logger.error(`${this.spec.id} acp exited unexpectedly`, {
+        code,
+        signal,
+      });
       this.state = "error";
       this.lastError = `acp exited (code=${code}, signal=${signal})`;
       setTimeout(() => {
@@ -325,7 +353,7 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
           try {
             await this.startAcp();
           } catch (err) {
-            this.logger.error("opencode acp restart failed", {
+            this.logger.error(`${this.spec.id} acp restart failed`, {
               error: err instanceof Error ? err.message : String(err),
             });
           }
@@ -334,24 +362,23 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
     });
 
     child.on("error", (err) => {
-      this.logger.error("opencode acp spawn error", { error: err.message });
+      this.logger.error(`${this.spec.id} acp spawn error`, { error: err.message });
       this.state = "error";
       this.lastError = err.message;
     });
 
     if (!child.stdin || !child.stdout) {
-      throw new Error("opencode acp stdio pipes missing");
+      throw new Error(`${this.spec.id} acp stdio pipes missing`);
     }
 
     const input = Writable.toWeb(child.stdin);
     const output = Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>;
     const stream = acp.ndJsonStream(input, output);
 
-    // Brief wait so spawn failures surface before initialize.
     await sleep(100);
     if (this.child !== child) {
       throw new Error(
-        `opencode acp died before connect: ${this.lastError ?? "unknown"}`,
+        `${this.spec.id} acp died before connect: ${this.lastError ?? "unknown"}`,
       );
     }
 
@@ -363,7 +390,7 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
     });
 
     this.state = "ready";
-    this.logger.info("opencode acp ready", {
+    this.logger.info(`${this.spec.id} acp ready`, {
       version: this.installedVersion,
       protocolVersion: this.connection.protocolVersion,
       agentName: this.connection.agentName,
@@ -399,8 +426,9 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
   }
 
   private async runUpdateCycle(): Promise<void> {
+    if (!this.settings.packageName) return;
     this.lastUpdateCheckAt = new Date().toISOString();
-    this.logger.info("opencode update check", {
+    this.logger.info(`${this.spec.id} update check`, {
       desired: this.settings.version,
       current: this.installedVersion,
     });
@@ -415,30 +443,34 @@ export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
       before === after &&
       !isFloatingTag(this.settings.version)
     ) {
-      this.logger.info("opencode already at desired version", {
+      this.logger.info(`${this.spec.id} already at desired version`, {
         version: after,
       });
       this.state = "ready";
       return;
     }
 
-    this.logger.info("restarting opencode acp after update", { before, after });
+    this.logger.info(`restarting ${this.spec.id} acp after update`, {
+      before,
+      after,
+    });
     await this.killAcp();
     await this.startAcp();
   }
 }
 
-export function createManagedOpenCodeAcpRuntime(
+export function createManagedStdioAcpRuntime(
   config: AppConfig,
   logger: Logger,
-  overlay?: Partial<OpenCodeHarnessSettings>,
-): ManagedOpenCodeAcpRuntime | null {
-  if (!config.SESSIONS_ENABLED || config.AGENT_HARNESS !== "opencode") {
-    return null;
-  }
-  return new ManagedOpenCodeAcpRuntime(
+  harnessId: AgentHarnessId,
+  overlay?: HarnessOverlay,
+): ManagedStdioAcpRuntime | null {
+  if (!config.SESSIONS_ENABLED) return null;
+  const spec = harnessSpec(harnessId);
+  return new ManagedStdioAcpRuntime(
     config,
-    logger.child({ component: "opencode-acp" }),
-    resolveOpenCodeHarnessSettings(overlay),
+    logger.child({ component: `${harnessId}-acp` }),
+    spec,
+    resolveStdioHarnessSettings(spec, overlay),
   );
 }

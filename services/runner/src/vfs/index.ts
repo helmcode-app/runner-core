@@ -9,10 +9,10 @@ export {
 export {
   attachVfsWebSocket,
   createVfsGateway,
-  startVfsBridge,
   VFS_WS_PATH,
   type VfsGateway,
 } from "./gateway.js";
+export { VfsBridgePool } from "./pool.js";
 export { handleVfsHttp, type VfsHttpContext } from "./http.js";
 export {
   JsonRpcCode,

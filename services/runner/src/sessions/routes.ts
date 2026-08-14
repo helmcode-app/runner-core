@@ -1,19 +1,17 @@
 /**
- * Backend-agnostic agent session API (open-core) — HTTP dispatch only.
+ * Product session API — REST/SSE shaped after ACP session methods.
  *
  *   GET    /v1/sessions/health
  *   GET    /v1/sessions/models
- *   GET    /v1/sessions/events          SSE
- *   POST   /v1/sessions
+ *   GET    /v1/sessions/events          SSE (session/update fan-out)
+ *   POST   /v1/sessions                 session/new
  *   GET    /v1/sessions
  *   GET    /v1/sessions/:id
- *   DELETE /v1/sessions/:id
- *   POST   /v1/sessions/:id/prompt
- *   GET    /v1/sessions/:id/history
- *   POST   /v1/sessions/:id/abort
- *   POST   /v1/sessions/:id/revert
- *   POST   /v1/sessions/:id/unrevert
- *   GET    /v1/sessions/:id/diff
+ *   DELETE /v1/sessions/:id             session/close
+ *   POST   /v1/sessions/:id/prompt      session/prompt (202)
+ *   GET    /v1/sessions/:id/history     reconnect timeline (product)
+ *   POST   /v1/sessions/:id/cancel      session/cancel
+ *   POST   /v1/sessions/:id/rewind      product checkpoint rewind
  *
  * Handlers: `./handlers.ts`. Runtime: Agent Gateway (ACP Client).
  */
@@ -25,18 +23,16 @@ import { sendJson } from "../http/index.js";
 import type { Logger } from "../logger.js";
 import { sendSessionError } from "./errors.js";
 import {
-  handleAbort,
+  handleCancel,
   handleCreate,
   handleDelete,
-  handleDiff,
   handleGet,
   handleHealth,
   handleHistory,
   handleList,
   handleModels,
   handlePrompt,
-  handleRevert,
-  handleUnrevert,
+  handleRewind,
   type SessionHandlerContext,
 } from "./handlers.js";
 import { proxySessionEvents } from "./sse.js";
@@ -49,7 +45,7 @@ export interface SessionRouteContext {
 }
 
 const SESSION_ID_ACTION =
-  /^\/v1\/sessions\/([^/]+)(?:\/(prompt|history|abort|revert|unrevert|diff))?$/;
+  /^\/v1\/sessions\/([^/]+)(?:\/(prompt|history|cancel|rewind))?$/;
 
 /**
  * Handle `/v1/sessions/*`. Returns true if the path was claimed.
@@ -129,20 +125,12 @@ export async function handleSessionHttp(
       return await handleHistory(req, res, hctx, sessionId);
     }
 
-    if (method === "POST" && action === "abort") {
-      return await handleAbort(res, hctx, sessionId);
+    if (method === "POST" && action === "cancel") {
+      return await handleCancel(res, hctx, sessionId);
     }
 
-    if (method === "POST" && action === "revert") {
-      return await handleRevert(req, res, hctx, sessionId);
-    }
-
-    if (method === "POST" && action === "unrevert") {
-      return await handleUnrevert(res, hctx, sessionId);
-    }
-
-    if (method === "GET" && action === "diff") {
-      return await handleDiff(req, res, hctx, sessionId);
+    if (method === "POST" && action === "rewind") {
+      return await handleRewind(req, res, hctx, sessionId);
     }
 
     sendJson(res, 404, { error: "session route not found" });

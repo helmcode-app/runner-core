@@ -1,13 +1,13 @@
 import { createServer, type Server } from "node:http";
+import {
+  createAgentRuntime,
+  type AgentGateway,
+  type AgentRuntime,
+} from "../../agent/index.js";
+import type { OpenCodeHarnessSettings } from "../../agent/harnesses/opencode/settings.js";
 import type { AppConfig } from "../../config.js";
 import { sendJson } from "../../http/index.js";
 import type { Logger } from "../../logger.js";
-import {
-  createManagedOpenCodeRuntime,
-  createOpenCodeClient,
-  type ManagedOpenCodeRuntime,
-  type OpenCodeClient,
-} from "../../opencode/index.js";
 import {
   createTerminalGateway,
   type TerminalGateway,
@@ -25,15 +25,16 @@ export interface OpenCoreServer {
   baseUrl: string;
   vfs: VfsGateway;
   terminal: TerminalGateway;
-  /** Pluggable session runtime (OpenCode adapter today). */
-  sessionRuntime: OpenCodeClient | null;
-  /** Local install/serve supervisor when OPENCODE_MANAGED. */
-  managedOpenCode: ManagedOpenCodeRuntime | null;
+  /** ACP agent gateway when sessions are enabled. */
+  agentGateway: AgentGateway | null;
+  agentRuntime: AgentRuntime | null;
   close(): Promise<void>;
 }
 
 export interface StartOpenCoreOptions {
   installSignalHandlers?: boolean;
+  /** Test/smoke overlay for harness install paths (not env). */
+  harnessOverlay?: Partial<OpenCodeHarnessSettings>;
 }
 
 /**
@@ -42,7 +43,7 @@ export interface StartOpenCoreOptions {
  * Unified ingress (same host/port):
  * - `/v1/vfs`       — VFS JSON-RPC
  * - `/v1/terminal`  — WebSSH (in-process PTY)
- * - `/v1/sessions`  — agent sessions (OpenCode runtime adapter)
+ * - `/v1/sessions`  — agent sessions (ACP Client → harness ACP Server)
  */
 export async function startOpenCore(
   config: AppConfig,
@@ -61,22 +62,25 @@ export async function startOpenCore(
     log.info("open-core API auth enabled (Bearer token)");
   }
 
-  // Managed OpenCode: install at boot + start serve before HTTP client connects.
-  const managedOpenCode = createManagedOpenCodeRuntime(config, logger);
-  if (managedOpenCode) {
-    log.info("starting managed OpenCode runtime", {
-      version: config.OPENCODE_VERSION,
-      prefix: config.OPENCODE_PREFIX,
-      updateIntervalHours: config.OPENCODE_UPDATE_INTERVAL_HOURS,
+  const agentRuntime = createAgentRuntime(
+    config,
+    logger,
+    opts.harnessOverlay ? { harnessOverlay: opts.harnessOverlay } : undefined,
+  );
+  if (agentRuntime) {
+    log.info("starting agent runtime", {
+      harness: config.AGENT_HARNESS,
+      transport: "stdio",
+      managed: true,
     });
-    await managedOpenCode.start();
+    await agentRuntime.start();
   }
 
-  const sessionRuntime = createOpenCodeClient(config, logger);
-  if (sessionRuntime) {
+  const agentGateway = agentRuntime?.gateway ?? null;
+  if (agentGateway) {
     log.info("agent sessions enabled", {
-      runtime: sessionRuntime.baseUrl,
-      managed: Boolean(managedOpenCode),
+      harness: config.AGENT_HARNESS,
+      provider: "acp",
     });
   }
 
@@ -88,8 +92,7 @@ export async function startOpenCore(
         config,
         apiToken,
         getBridge: () => vfs.bridge,
-        sessionRuntime,
-        managedOpenCode,
+        agentGateway,
         logger,
       });
     } catch (err) {
@@ -102,7 +105,6 @@ export async function startOpenCore(
     }
   });
 
-  // WebSocket gateways share the HTTP server (no extra ports).
   vfs = await createVfsGateway(server, config, logger);
   const terminal = createTerminalGateway(server, config, logger);
 
@@ -123,14 +125,14 @@ export async function startOpenCore(
     port,
     vfs: Boolean(vfs.bridge),
     terminalWs: terminal.enabled ? "/v1/terminal" : "disabled",
-    sessions: sessionRuntime ? sessionRuntime.baseUrl : "disabled",
+    sessions: agentGateway ? `acp:${config.AGENT_HARNESS}` : "disabled",
   });
 
   const close = async (): Promise<void> => {
     await terminal.close();
     await vfs.close();
-    if (managedOpenCode) {
-      await managedOpenCode.stop();
+    if (agentRuntime) {
+      await agentRuntime.stop();
     }
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
@@ -157,8 +159,8 @@ export async function startOpenCore(
     baseUrl: `http://${host}:${port}`,
     vfs,
     terminal,
-    sessionRuntime,
-    managedOpenCode,
+    agentGateway,
+    agentRuntime,
     close,
   };
 }

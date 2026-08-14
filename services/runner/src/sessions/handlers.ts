@@ -1,17 +1,13 @@
 /**
- * Session HTTP handlers (health, models, CRUD, prompt, history, revert, diff).
- * Dispatch lives in `routes.ts`.
+ * Session HTTP handlers (health, models, CRUD, prompt, history, abort, revert, diff).
+ * Dispatch lives in `routes.ts`. Backend: Agent Gateway (ACP).
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AgentGateway } from "../agent/gateway.js";
 import type { AppConfig } from "../config.js";
 import { readJson, sendJson } from "../http/index.js";
 import type { Logger } from "../logger.js";
-import type { OpenCodeClient } from "../opencode/client.js";
-import { submitPromptAsync } from "../opencode/prompt.js";
-import type { ManagedOpenCodeRuntime } from "../opencode/runtime.js";
-import { mapHistoryToTimeline, mapSession, mapSessionList } from "./mapper.js";
-import { loadSessionModelsCatalog } from "./models.js";
 import type {
   CreateSessionRequest,
   PromptRequest,
@@ -21,8 +17,7 @@ import type {
 
 export interface SessionHandlerContext {
   config: AppConfig;
-  client: OpenCodeClient;
-  managedOpenCode?: ManagedOpenCodeRuntime | null;
+  gateway: AgentGateway;
   logger: Logger;
 }
 
@@ -30,23 +25,8 @@ export async function handleHealth(
   res: ServerResponse,
   ctx: SessionHandlerContext,
 ): Promise<true> {
-  const managed = ctx.managedOpenCode?.status;
-  try {
-    const h = await ctx.client.health();
-    sendJson(res, 200, {
-      ok: h.healthy,
-      provider: "session-runtime",
-      ...(h.version !== undefined ? { version: h.version } : {}),
-      ...(managed !== undefined ? { managed } : { managed: false }),
-    });
-  } catch (err) {
-    sendJson(res, 502, {
-      ok: false,
-      provider: "session-runtime",
-      error: err instanceof Error ? err.message : String(err),
-      ...(managed !== undefined ? { managed } : { managed: false }),
-    });
-  }
+  const h = ctx.gateway.health();
+  sendJson(res, h.ok ? 200 : 502, h);
   return true;
 }
 
@@ -58,9 +38,7 @@ export async function handleModels(
   try {
     const url = requestUrl(req);
     const forceRefresh = url.searchParams.get("refresh") === "1";
-    const mapped = await loadSessionModelsCatalog(ctx.client, ctx.config, {
-      forceRefresh,
-    });
+    const mapped = await ctx.gateway.models(forceRefresh);
     sendJson(res, 200, mapped);
   } catch (err) {
     sendJson(res, 502, {
@@ -78,11 +56,9 @@ export async function handleCreate(
   ctx: SessionHandlerContext,
 ): Promise<true> {
   const body = (await readJson(req).catch(() => ({}))) as CreateSessionRequest;
-  const raw = await ctx.client.createSession({
+  const session = await ctx.gateway.createSession({
     ...(body.title !== undefined ? { title: body.title } : {}),
-    ...(body.parentId !== undefined ? { parentID: body.parentId } : {}),
   });
-  const session = mapSession(raw);
   ctx.logger.info("session created", { sessionId: session.id });
   sendJson(res, 201, { session });
   return true;
@@ -92,8 +68,7 @@ export async function handleList(
   res: ServerResponse,
   ctx: SessionHandlerContext,
 ): Promise<true> {
-  const raw = await ctx.client.listSessions();
-  sendJson(res, 200, { sessions: mapSessionList(raw) });
+  sendJson(res, 200, { sessions: ctx.gateway.listSessions() });
   return true;
 }
 
@@ -102,8 +77,7 @@ export async function handleGet(
   ctx: SessionHandlerContext,
   sessionId: string,
 ): Promise<true> {
-  const raw = await ctx.client.getSession(sessionId);
-  sendJson(res, 200, { session: mapSession(raw) });
+  sendJson(res, 200, { session: ctx.gateway.getSession(sessionId) });
   return true;
 }
 
@@ -112,7 +86,7 @@ export async function handleDelete(
   ctx: SessionHandlerContext,
   sessionId: string,
 ): Promise<true> {
-  await ctx.client.deleteSession(sessionId);
+  await ctx.gateway.deleteSession(sessionId);
   sendJson(res, 200, { sessionId, deleted: true });
   return true;
 }
@@ -127,31 +101,16 @@ export async function handlePrompt(
   ctx.logger.info("session prompt", {
     sessionId,
     mode: body.mode ?? "agent",
-    model: body.model ?? ctx.config.OPENCODE_DEFAULT_MODEL,
+    model: body.model ?? ctx.config.AGENT_DEFAULT_MODEL,
     promptLen: body.prompt?.length ?? 0,
   });
-  const accepted = await submitPromptAsync(ctx.client, ctx.config, sessionId, {
-    prompt: body.prompt,
-    ...(body.model !== undefined ? { model: body.model } : {}),
-    ...(body.mode !== undefined ? { mode: body.mode } : {}),
-    ...(body.contextPaths !== undefined
-      ? { contextPaths: body.contextPaths }
-      : {}),
-    ...(body.system !== undefined ? { system: body.system } : {}),
-    ...(body.messageId !== undefined ? { messageID: body.messageId } : {}),
-  });
+  const accepted = await ctx.gateway.submitPrompt(sessionId, body);
   ctx.logger.info("session prompt accepted", {
     sessionId: accepted.sessionId,
     mode: accepted.mode,
     model: accepted.model,
   });
-  // Public response never includes vendor `upstream` field.
-  sendJson(res, 202, {
-    sessionId: accepted.sessionId,
-    status: accepted.status,
-    mode: accepted.mode,
-    ...(accepted.model !== undefined ? { model: accepted.model } : {}),
-  });
+  sendJson(res, 202, accepted);
   return true;
 }
 
@@ -168,26 +127,14 @@ export async function handleHistory(
       ? Number.parseInt(limitRaw, 10)
       : undefined;
 
-  const [messages, sessionRaw] = await Promise.all([
-    ctx.client.listMessages(sessionId, {
-      ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
-    }),
-    ctx.client.getSession(sessionId).catch(() => undefined),
-  ]);
-
-  const entries = mapHistoryToTimeline(messages);
-  if (entries.length === 0) {
-    ctx.logger.debug("session history empty", {
-      sessionId,
-      rawType: Array.isArray(messages) ? "array" : typeof messages,
-      rawLen: Array.isArray(messages) ? messages.length : undefined,
-    });
-  }
-
-  const payload: SessionHistoryResponse = {
+  const hist = ctx.gateway.history(
     sessionId,
-    entries,
-    ...(sessionRaw !== undefined ? { session: mapSession(sessionRaw) } : {}),
+    limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+  );
+  const payload: SessionHistoryResponse = {
+    sessionId: hist.sessionId,
+    entries: hist.entries,
+    session: hist.session,
   };
   sendJson(res, 200, payload);
   return true;
@@ -198,12 +145,8 @@ export async function handleAbort(
   ctx: SessionHandlerContext,
   sessionId: string,
 ): Promise<true> {
-  const result = await ctx.client.abortSession(sessionId);
-  const aborted =
-    result === true ||
-    result === undefined ||
-    (typeof result === "object" && result !== null);
-  sendJson(res, 200, { sessionId, aborted: Boolean(aborted) });
+  const aborted = await ctx.gateway.abort(sessionId);
+  sendJson(res, 200, { sessionId, aborted });
   return true;
 }
 
@@ -219,17 +162,7 @@ export async function handleRevert(
     sendJson(res, 400, { error: "messageId is required" });
     return true;
   }
-  const partID = (body.partId ?? body.partID)?.trim();
-  ctx.logger.info("session revert", { sessionId, messageID });
-  const raw = await ctx.client.revertSession(sessionId, {
-    messageID,
-    ...(partID ? { partID } : {}),
-  });
-  sendJson(res, 200, {
-    sessionId,
-    reverted: true,
-    session: mapSession(raw),
-  });
+  ctx.gateway.revert(sessionId, messageID);
   return true;
 }
 
@@ -238,13 +171,7 @@ export async function handleUnrevert(
   ctx: SessionHandlerContext,
   sessionId: string,
 ): Promise<true> {
-  ctx.logger.info("session unrevert", { sessionId });
-  const raw = await ctx.client.unrevertSession(sessionId);
-  sendJson(res, 200, {
-    sessionId,
-    unreverted: true,
-    session: mapSession(raw),
-  });
+  ctx.gateway.unrevert(sessionId);
   return true;
 }
 
@@ -254,18 +181,9 @@ export async function handleDiff(
   ctx: SessionHandlerContext,
   sessionId: string,
 ): Promise<true> {
-  const url = requestUrl(req);
-  const messageID =
-    url.searchParams.get("messageId") ??
-    url.searchParams.get("messageID") ??
-    undefined;
-  const raw = await ctx.client.sessionDiff(sessionId, {
-    ...(messageID ? { messageID } : {}),
-  });
-  sendJson(res, 200, {
-    sessionId,
-    diffs: Array.isArray(raw) ? raw : [],
-  });
+  void req;
+  const result = ctx.gateway.diff(sessionId);
+  sendJson(res, 200, result);
   return true;
 }
 

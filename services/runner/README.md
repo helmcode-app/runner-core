@@ -1,6 +1,6 @@
 # @helmcode/runner
 
-Node.js open-core daemon for HelmCode: agent sessions (OpenCode), VFS, terminal.
+Node.js open-core daemon for HelmCode: agent sessions (ACP → OpenCode), VFS, terminal.
 
 ## Mode
 
@@ -20,7 +20,10 @@ src/
 ├── modes/
 │   └── open-core/             # server + routes
 ├── sessions/                  # Public /v1/sessions (Helm DTOs)
-├── opencode/                  # Private session-runtime adapter + managed install
+├── agent/                     # ACP Client, gateway, harness supervisors
+│   └── harnesses/             # ACP Server processes (default: opencode)
+│       ├── create.ts          # AGENT_HARNESS factory
+│       └── opencode/          # auth.json + `opencode acp`
 ├── terminal/                  # WebSSH: WS ↔ in-process PTY
 ├── vfs/                       # helm-vfs bridge + WS
 └── util/
@@ -42,8 +45,7 @@ Auth: `OPENCORE_API_TOKEN` as Bearer or Upgrade `?token=`.
 | Credential | Purpose |
 |------------|---------|
 | `OPENCORE_API_TOKEN` | HTTP + WebSockets |
-| `OPENCODE_*` | Sessions: managed install/serve |
-| `OPENCODE_GO_API_KEY` / `OPENCODE_ZEN_API_KEY` | At least one when managed — written to OpenCode `auth.json` as `opencode-go` / `opencode` |
+| `SESSIONS_ENABLED` / `AGENT_*` | Sessions: harness + LLM auth (install knobs in `agent/harnesses/*/settings.ts`) |
 
 ## Develop
 
@@ -60,7 +62,7 @@ npm run dev
 | Change | Where |
 |--------|--------|
 | Session routes / DTOs | `sessions/` |
-| OpenCode client / managed runtime | `opencode/` |
+| ACP gateway / harnesses | `agent/` |
 | Shared WS upgrade | `http/ws-upgrade.ts` |
 | Terminal | `terminal/` |
 | VFS | `vfs/` + Go `services/vfs` |

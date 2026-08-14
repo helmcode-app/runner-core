@@ -3,9 +3,13 @@
  */
 
 import type { ServerResponse } from "node:http";
+import {
+  AgentCapabilityError,
+  AgentNotFoundError,
+  AgentRuntimeError,
+} from "../agent/errors.js";
 import { sendJson } from "../http/index.js";
 import type { Logger } from "../logger.js";
-import { OpenCodeUpstreamError } from "../opencode/types.js";
 
 /** Always returns true so route handlers can `return sendSessionError(...)`. */
 export function sendSessionError(
@@ -13,18 +17,22 @@ export function sendSessionError(
   err: unknown,
   log: Logger,
 ): true {
-  if (err instanceof OpenCodeUpstreamError) {
-    log.warn("session runtime upstream error", {
+  if (err instanceof AgentNotFoundError) {
+    sendJson(res, 404, { error: err.message });
+    return true;
+  }
+  if (err instanceof AgentCapabilityError) {
+    sendJson(res, 501, { error: err.message });
+    return true;
+  }
+  if (err instanceof AgentRuntimeError) {
+    log.warn("agent runtime error", {
       status: err.status,
       error: err.message,
     });
-    const httpStatus =
-      err.status >= 400 && err.status < 600 && err.status !== 502
-        ? err.status
-        : 502;
-    sendJson(res, httpStatus >= 400 ? httpStatus : 502, {
+    sendJson(res, err.status >= 400 ? err.status : 502, {
       error: err.message,
-      details: err.body,
+      ...(err.body !== undefined ? { details: err.body } : {}),
     });
     return true;
   }

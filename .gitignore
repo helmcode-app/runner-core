@@ -146,6 +146,9 @@ vite.config.ts.timestamp-*
 .idea/
 .vscode/
 
+# Local pi agent sessions / artifacts
+.pi/
+
 # Go
 services/vfs/bin/
 **/bin/helm-vfs

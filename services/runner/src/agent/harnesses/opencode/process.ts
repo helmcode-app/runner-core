@@ -1,19 +1,21 @@
 /**
- * Managed OpenCode lifecycle: install at boot, spawn `opencode serve`,
- * optional periodic upgrade + restart.
- *
- * Only used when OPENCODE_ENABLED && OPENCODE_MANAGED.
- * External daemons (OPENCODE_MANAGED=false) are unaffected.
- *
- * Binary path helpers: `./binary.ts`
+ * Managed OpenCode ACP harness: install binary, spawn `opencode acp`, ACP stdio.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { AppConfig } from "../config.js";
-import type { Logger } from "../logger.js";
-import { runCommand } from "../util/process.js";
+import { Readable, Writable } from "node:stream";
+import * as acp from "@agentclientprotocol/sdk";
+import type { AppConfig } from "../../../config.js";
+import type { Logger } from "../../../logger.js";
+import { runCommand } from "../../../util/process.js";
+import {
+  connectAcpClient,
+  type AcpConnection,
+  type SessionUpdateHandler,
+} from "../../acp/connection.js";
+import { AgentRuntimeError } from "../../errors.js";
 import { materializeOpenCodeAuth, resolveOpenCodeHome } from "./auth.js";
 import {
   isExecutable,
@@ -23,15 +25,18 @@ import {
   resolveOpenCodeBinaryPath,
   sleep,
 } from "./binary.js";
-import { OpenCodeClient } from "./client.js";
+import type { HarnessRuntime } from "../types.js";
+import {
+  resolveOpenCodeHarnessSettings,
+  type OpenCodeHarnessSettings,
+} from "./settings.js";
 
-// Re-export binary helpers used by tests / consumers.
 export {
   openCodePackageSpec,
   resolveOpenCodeBinaryPath,
 } from "./binary.js";
 
-export type ManagedRuntimeState =
+export type ManagedHarnessState =
   | "idle"
   | "installing"
   | "starting"
@@ -40,65 +45,87 @@ export type ManagedRuntimeState =
   | "stopped"
   | "error";
 
-export interface ManagedOpenCodeStatus {
-  state: ManagedRuntimeState;
+export interface ManagedOpenCodeAcpStatus {
+  state: ManagedHarnessState;
   managed: true;
+  harness: "opencode";
+  transport: "stdio";
   version?: string;
   desiredVersion: string;
   binaryPath: string;
-  baseUrl: string;
+  protocolVersion?: number;
+  agentName?: string;
   error?: string;
   lastInstallAt?: string;
   lastUpdateCheckAt?: string;
 }
 
-export class ManagedOpenCodeRuntime {
+/** Default ACP Server: install + spawn `opencode acp`. */
+export class ManagedOpenCodeAcpRuntime implements HarnessRuntime {
   private child: ChildProcess | null = null;
+  private connection: AcpConnection | null = null;
   private updateTimer: NodeJS.Timeout | null = null;
-  private state: ManagedRuntimeState = "idle";
+  private state: ManagedHarnessState = "idle";
   private lastError: string | undefined;
   private installedVersion: string | undefined;
   private lastInstallAt: string | undefined;
   private lastUpdateCheckAt: string | undefined;
   private stopping = false;
   private op: Promise<void> = Promise.resolve();
+  private onSessionUpdate: SessionUpdateHandler = () => undefined;
 
   constructor(
     private readonly config: AppConfig,
     private readonly logger: Logger,
+    private readonly settings: OpenCodeHarnessSettings,
   ) {}
 
-  get status(): ManagedOpenCodeStatus {
-    return {
+  get status(): ManagedOpenCodeAcpStatus {
+    const status: ManagedOpenCodeAcpStatus = {
       state: this.state,
       managed: true,
-      desiredVersion: this.config.OPENCODE_VERSION,
-      binaryPath: resolveOpenCodeBinaryPath(this.config),
-      baseUrl: this.config.OPENCODE_BASE_URL.replace(/\/+$/, ""),
-      ...(this.installedVersion !== undefined
-        ? { version: this.installedVersion }
-        : {}),
-      ...(this.lastError !== undefined ? { error: this.lastError } : {}),
-      ...(this.lastInstallAt !== undefined
-        ? { lastInstallAt: this.lastInstallAt }
-        : {}),
-      ...(this.lastUpdateCheckAt !== undefined
-        ? { lastUpdateCheckAt: this.lastUpdateCheckAt }
-        : {}),
+      harness: "opencode",
+      transport: "stdio",
+      desiredVersion: this.settings.version,
+      binaryPath: resolveOpenCodeBinaryPath(this.settings),
     };
+    if (this.installedVersion !== undefined) {
+      status.version = this.installedVersion;
+    }
+    if (this.connection) {
+      status.protocolVersion = this.connection.protocolVersion;
+      if (this.connection.agentName) {
+        status.agentName = this.connection.agentName;
+      }
+    }
+    if (this.lastError !== undefined) status.error = this.lastError;
+    if (this.lastInstallAt !== undefined) {
+      status.lastInstallAt = this.lastInstallAt;
+    }
+    if (this.lastUpdateCheckAt !== undefined) {
+      status.lastUpdateCheckAt = this.lastUpdateCheckAt;
+    }
+    return status;
   }
 
-  /**
-   * Install (if needed) + start serve + schedule periodic updates.
-   * Throws on hard failure so open-core boot fails visibly.
-   */
+  /** Wire ACP session/update fan-out before start(). */
+  setSessionUpdateHandler(handler: SessionUpdateHandler): void {
+    this.onSessionUpdate = handler;
+  }
+
+  getConnection(): AcpConnection {
+    if (!this.connection) {
+      throw new AgentRuntimeError("ACP connection not ready", 503);
+    }
+    return this.connection;
+  }
+
   async start(): Promise<void> {
     await this.serialize(async () => {
       this.stopping = false;
-      // Same as production: API key from env → auth.json (no host mount).
-      await materializeOpenCodeAuth(this.config, this.logger);
+      await materializeOpenCodeAuth(this.config, this.logger, this.settings);
       await this.ensureInstalled("boot");
-      await this.startServe();
+      await this.startAcp();
       this.scheduleUpdates();
     });
   }
@@ -107,12 +134,11 @@ export class ManagedOpenCodeRuntime {
     await this.serialize(async () => {
       this.stopping = true;
       this.clearUpdateTimer();
-      await this.killServe();
+      await this.killAcp();
       this.state = "stopped";
     });
   }
 
-  /** Force an update check (used by tests / future admin routes). */
   async checkForUpdate(): Promise<void> {
     await this.serialize(async () => {
       await this.runUpdateCycle();
@@ -137,7 +163,7 @@ export class ManagedOpenCodeRuntime {
 
   private scheduleUpdates(): void {
     this.clearUpdateTimer();
-    const hours = this.config.OPENCODE_UPDATE_INTERVAL_HOURS;
+    const hours = this.settings.updateIntervalHours;
     if (hours <= 0) {
       this.logger.info("opencode periodic update disabled", {
         intervalHours: hours,
@@ -164,18 +190,20 @@ export class ManagedOpenCodeRuntime {
   }
 
   private async ensureInstalled(reason: "boot" | "update"): Promise<void> {
-    const prefix = this.config.OPENCODE_PREFIX;
-    const bin = resolveOpenCodeBinaryPath(this.config);
-    const spec = openCodePackageSpec(this.config.OPENCODE_VERSION);
+    const prefix = this.settings.prefix;
+    const bin = resolveOpenCodeBinaryPath(this.settings);
+    const spec = openCodePackageSpec(
+      this.settings.version,
+      this.settings.packageName,
+    );
     const already = await isExecutable(bin);
 
-    // Boot: install only when missing. Periodic updates reinstall (e.g. @latest).
     if (reason === "boot" && already) {
       this.installedVersion = await this.readBinaryVersion(bin);
       this.logger.info("opencode binary present", {
         bin,
         version: this.installedVersion,
-        desired: this.config.OPENCODE_VERSION,
+        desired: this.settings.version,
       });
       return;
     }
@@ -188,15 +216,15 @@ export class ManagedOpenCodeRuntime {
       reason,
       spec,
       prefix,
-      npm: this.config.OPENCODE_NPM_BIN,
+      npm: this.settings.npmBin,
     });
 
     const result = await runCommand(
-      this.config.OPENCODE_NPM_BIN,
+      this.settings.npmBin,
       ["install", "-g", "--prefix", prefix, spec],
       {
         cwd: prefix,
-        timeoutMs: this.config.OPENCODE_INSTALL_TIMEOUT_MS,
+        timeoutMs: this.settings.installTimeoutMs,
         maxOutputChars: 256 * 1024,
         env: {
           npm_config_update_notifier: "false",
@@ -244,84 +272,60 @@ export class ManagedOpenCodeRuntime {
     }
   }
 
-  private async startServe(): Promise<void> {
-    if (this.child && !this.child.killed) {
+  private async startAcp(): Promise<void> {
+    if (this.child && !this.child.killed && this.connection) {
       return;
     }
 
-    const bin = resolveOpenCodeBinaryPath(this.config);
+    const bin = resolveOpenCodeBinaryPath(this.settings);
     if (!(await pathExists(bin))) {
       throw new Error(`opencode binary not found: ${bin}`);
     }
 
     this.state = "starting";
-    const hostname = this.config.OPENCODE_SERVE_HOSTNAME;
-    const port = this.config.OPENCODE_SERVE_PORT;
-    const args = ["serve", "--hostname", hostname, "--port", String(port)];
-
-    const home = resolveOpenCodeHome(this.config);
-    // Project root for OpenCode sessions (must be a real repo). Auth still uses HOME.
+    const home = resolveOpenCodeHome(this.settings);
     const workDir = this.config.MAIN_REPO_PATH || home;
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      // Ensure serve reads the auth.json we just wrote under this home.
       HOME: home,
     };
-    if (this.config.OPENCODE_SERVER_PASSWORD) {
-      env.OPENCODE_SERVER_PASSWORD = this.config.OPENCODE_SERVER_PASSWORD;
-    }
-    if (this.config.OPENCODE_SERVER_USERNAME) {
-      env.OPENCODE_SERVER_USERNAME = this.config.OPENCODE_SERVER_USERNAME;
-    }
 
-    this.logger.info("starting opencode serve", {
+    this.logger.info("starting opencode acp", {
       bin,
-      hostname,
-      port,
       home,
       cwd: workDir,
     });
 
-    const child = spawn(bin, args, {
+    const child = spawn(bin, ["acp"], {
       env,
       cwd: workDir,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     this.child = child;
 
-    child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
-    // OpenCode logs to stdout/stderr — surface at info so docker compose logs show turns.
-    child.stdout?.on("data", (chunk: string) => {
-      for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-        this.logger.info("opencode serve", { stream: "stdout", line });
-      }
-    });
     child.stderr?.on("data", (chunk: string) => {
       for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-        this.logger.info("opencode serve", { stream: "stderr", line });
+        this.logger.info("opencode acp", { stream: "stderr", line });
       }
     });
 
     child.on("exit", (code, signal) => {
       if (this.child === child) this.child = null;
+      this.connection = null;
       if (this.stopping) return;
-      this.logger.error("opencode serve exited unexpectedly", {
-        code,
-        signal,
-      });
+      this.logger.error("opencode acp exited unexpectedly", { code, signal });
       this.state = "error";
-      this.lastError = `serve exited (code=${code}, signal=${signal})`;
-      // Best-effort restart after a short delay.
+      this.lastError = `acp exited (code=${code}, signal=${signal})`;
       setTimeout(() => {
         if (this.stopping) return;
         void this.serialize(async () => {
           if (this.stopping) return;
           try {
-            await this.startServe();
+            await this.startAcp();
           } catch (err) {
-            this.logger.error("opencode serve restart failed", {
+            this.logger.error("opencode acp restart failed", {
               error: err instanceof Error ? err.message : String(err),
             });
           }
@@ -330,52 +334,53 @@ export class ManagedOpenCodeRuntime {
     });
 
     child.on("error", (err) => {
-      this.logger.error("opencode serve spawn error", { error: err.message });
+      this.logger.error("opencode acp spawn error", { error: err.message });
       this.state = "error";
       this.lastError = err.message;
     });
 
-    await this.waitUntilHealthy();
-    this.state = "ready";
-    this.logger.info("opencode serve ready", {
-      baseUrl: this.config.OPENCODE_BASE_URL,
-      version: this.installedVersion,
-    });
-  }
-
-  private async waitUntilHealthy(): Promise<void> {
-    const client = new OpenCodeClient({
-      baseUrl: this.config.OPENCODE_BASE_URL,
-      timeoutMs: 5_000,
-      ...(this.config.OPENCODE_SERVER_PASSWORD
-        ? {
-            basicAuth: {
-              username: this.config.OPENCODE_SERVER_USERNAME || "opencode",
-              password: this.config.OPENCODE_SERVER_PASSWORD,
-            },
-          }
-        : {}),
-    });
-
-    const deadline = Date.now() + 60_000;
-    let lastErr = "timeout";
-    while (Date.now() < deadline) {
-      if (this.child === null) {
-        throw new Error(`opencode serve died before healthy: ${this.lastError ?? lastErr}`);
-      }
-      try {
-        const h = await client.health();
-        if (h.healthy) return;
-        lastErr = "health returned not healthy";
-      } catch (err) {
-        lastErr = err instanceof Error ? err.message : String(err);
-      }
-      await sleep(500);
+    if (!child.stdin || !child.stdout) {
+      throw new Error("opencode acp stdio pipes missing");
     }
-    throw new Error(`opencode serve not healthy within 60s: ${lastErr}`);
+
+    const input = Writable.toWeb(child.stdin);
+    const output = Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>;
+    const stream = acp.ndJsonStream(input, output);
+
+    // Brief wait so spawn failures surface before initialize.
+    await sleep(100);
+    if (this.child !== child) {
+      throw new Error(
+        `opencode acp died before connect: ${this.lastError ?? "unknown"}`,
+      );
+    }
+
+    this.connection = await connectAcpClient({
+      config: this.config,
+      logger: this.logger,
+      stream,
+      onSessionUpdate: (params) => this.onSessionUpdate(params),
+    });
+
+    this.state = "ready";
+    this.logger.info("opencode acp ready", {
+      version: this.installedVersion,
+      protocolVersion: this.connection.protocolVersion,
+      agentName: this.connection.agentName,
+    });
   }
 
-  private async killServe(): Promise<void> {
+  private async killAcp(): Promise<void> {
+    const conn = this.connection;
+    this.connection = null;
+    if (conn) {
+      try {
+        await conn.close();
+      } catch {
+        /* ignore */
+      }
+    }
+
     const child = this.child;
     if (!child || child.killed) {
       this.child = null;
@@ -388,7 +393,6 @@ export class ManagedOpenCodeRuntime {
       setTimeout(() => {
         if (!child.killed) child.kill("SIGKILL");
       }, 5_000).unref();
-      // If already exited
       if (child.exitCode !== null) done();
     });
     this.child = null;
@@ -397,7 +401,7 @@ export class ManagedOpenCodeRuntime {
   private async runUpdateCycle(): Promise<void> {
     this.lastUpdateCheckAt = new Date().toISOString();
     this.logger.info("opencode update check", {
-      desired: this.config.OPENCODE_VERSION,
+      desired: this.settings.version,
       current: this.installedVersion,
     });
 
@@ -405,30 +409,36 @@ export class ManagedOpenCodeRuntime {
     await this.ensureInstalled("update");
     const after = this.installedVersion;
 
-    if (before && after && before === after && !isFloatingTag(this.config.OPENCODE_VERSION)) {
-      this.logger.info("opencode already at desired version", { version: after });
+    if (
+      before &&
+      after &&
+      before === after &&
+      !isFloatingTag(this.settings.version)
+    ) {
+      this.logger.info("opencode already at desired version", {
+        version: after,
+      });
       this.state = "ready";
       return;
     }
 
-    // Restart serve to pick up new binary (even if --version string matches for @latest).
-    this.logger.info("restarting opencode serve after update", {
-      before,
-      after,
-    });
-    await this.killServe();
-    await this.startServe();
+    this.logger.info("restarting opencode acp after update", { before, after });
+    await this.killAcp();
+    await this.startAcp();
   }
 }
 
-/** Factory: only when sessions + managed mode are on. */
-export function createManagedOpenCodeRuntime(
+export function createManagedOpenCodeAcpRuntime(
   config: AppConfig,
   logger: Logger,
-): ManagedOpenCodeRuntime | null {
-  if (!config.OPENCODE_ENABLED || !config.OPENCODE_MANAGED) return null;
-  return new ManagedOpenCodeRuntime(
+  overlay?: Partial<OpenCodeHarnessSettings>,
+): ManagedOpenCodeAcpRuntime | null {
+  if (!config.SESSIONS_ENABLED || config.AGENT_HARNESS !== "opencode") {
+    return null;
+  }
+  return new ManagedOpenCodeAcpRuntime(
     config,
-    logger.child({ component: "opencode-runtime" }),
+    logger.child({ component: "opencode-acp" }),
+    resolveOpenCodeHarnessSettings(overlay),
   );
 }

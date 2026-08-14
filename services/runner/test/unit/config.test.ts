@@ -9,20 +9,16 @@ describe("loadConfig", () => {
     assert.equal(cfg.HELM_MODE, "open-core");
     assert.equal(cfg.PORT, 8080);
     assert.equal(cfg.MAIN_REPO_PATH, "/app/main_repo");
-    assert.equal(cfg.OPENCODE_ENABLED, false);
-    assert.equal(cfg.OPENCODE_MANAGED, false);
+    assert.equal(cfg.SESSIONS_ENABLED, false);
+    assert.equal(cfg.AGENT_HARNESS, "opencode");
     assert.equal(cfg.VFS_ENABLED, true);
   });
 
   it("parses numeric env coercions", () => {
     const cfg = loadConfig({
       PORT: "9090",
-      OPENCODE_SERVE_PORT: "4100",
-      OPENCODE_UPDATE_INTERVAL_HOURS: "12",
     });
     assert.equal(cfg.PORT, 9090);
-    assert.equal(cfg.OPENCODE_SERVE_PORT, 4100);
-    assert.equal(cfg.OPENCODE_UPDATE_INTERVAL_HOURS, 12);
   });
 
   it("allows ephemeral PORT=0", () => {
@@ -53,9 +49,33 @@ describe("loadConfig", () => {
   it("treats empty strings as unset", () => {
     const cfg = loadConfig({
       OPENCORE_API_TOKEN: "",
-      OPENCODE_DEFAULT_MODEL: "",
+      AGENT_DEFAULT_MODEL: "",
+      AGENT_API_KEY: "",
     });
     assert.equal(cfg.OPENCORE_API_TOKEN, undefined);
-    assert.equal(cfg.OPENCODE_DEFAULT_MODEL, undefined);
+    assert.equal(cfg.AGENT_DEFAULT_MODEL, undefined);
+    assert.equal(cfg.AGENT_API_KEY, undefined);
+    assert.equal(cfg.AGENT_PROVIDER, undefined);
+  });
+
+  it("parses AGENT_PROVIDER + AGENT_API_KEY", () => {
+    const cfg = loadConfig({
+      AGENT_PROVIDER: "opencode-zen",
+      AGENT_API_KEY: "secret",
+      AGENT_DEFAULT_MODEL: "opencode/big-pickle",
+    });
+    assert.equal(cfg.AGENT_PROVIDER, "opencode-zen");
+    assert.equal(cfg.AGENT_API_KEY, "secret");
+    assert.equal(cfg.AGENT_DEFAULT_MODEL, "opencode/big-pickle");
+  });
+
+  it("rejects unknown AGENT_PROVIDER", () => {
+    assert.throws(
+      () =>
+        loadConfig({
+          AGENT_PROVIDER: "anthropic",
+        }),
+      /Invalid environment configuration/,
+    );
   });
 });

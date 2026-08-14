@@ -1,271 +1,92 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  mapHistoryToTimeline,
-  mapSession,
-  mapSessionList,
-} from "../../src/sessions/index.js";
+  mapAcpSessionUpdate,
+  mapStopReason,
+  pickAcpModeId,
+} from "../../src/agent/index.js";
+import { resolvePermission } from "../../src/agent/permissions.js";
 
-describe("mapSession", () => {
-  it("maps id and title", () => {
-    const s = mapSession({ id: "ses_1", title: "Demo", status: "busy" });
-    assert.equal(s.id, "ses_1");
-    assert.equal(s.title, "Demo");
-    assert.equal(s.status, "running");
-  });
-
-  it("accepts sessionID field", () => {
-    const s = mapSession({ sessionID: "abc" });
-    assert.equal(s.id, "abc");
-  });
-});
-
-describe("mapSessionList", () => {
-  it("maps arrays", () => {
-    const list = mapSessionList([{ id: "a" }, { id: "b" }]);
-    assert.equal(list.length, 2);
-    assert.equal(list[0]?.id, "a");
-  });
-});
-
-describe("mapHistoryToTimeline", () => {
-  it("flattens OpenCode info/parts messages", () => {
-    const entries = mapHistoryToTimeline([
+describe("mapAcpSessionUpdate", () => {
+  it("maps agent_message_chunk to delta event", () => {
+    const mapped = mapAcpSessionUpdate(
       {
-        info: { id: "m1", role: "user", time: { created: "2026-01-01T00:00:00Z" } },
-        parts: [{ type: "text", text: "hello" }],
-      },
-      {
-        info: { id: "m2", role: "assistant" },
-        parts: [
-          { type: "text", text: "world" },
-          {
-            type: "tool",
-            tool: "read",
-            state: {
-              status: "completed",
-              input: { filePath: "src/foo.ts" },
-              title: "src/foo.ts",
-              output: "…",
-            },
-          },
-        ],
-      },
-    ]);
-    assert.equal(entries.length, 2);
-    assert.equal(entries[0]?.role, "user");
-    assert.equal(entries[0]?.text, "hello");
-    assert.equal(entries[1]?.role, "assistant");
-    // Answer text is primary; tools live in meta for Cursor-style cards.
-    assert.equal(entries[1]?.text, "world");
-    assert.deepEqual(entries[1]?.meta?.tools, ["Read src/foo.ts"]);
-    const actions = entries[1]?.meta?.toolActions as
-      | Array<{ name: string; path?: string; label: string }>
-      | undefined;
-    assert.equal(actions?.[0]?.name, "read");
-    assert.equal(actions?.[0]?.path, "src/foo.ts");
-  });
-
-  it("skips empty step-only assistant messages", () => {
-    const entries = mapHistoryToTimeline([
-      {
-        info: { id: "m1", role: "user" },
-        parts: [{ type: "text", text: "hi" }],
-      },
-      {
-        info: { id: "m2", role: "assistant" },
-        parts: [
-          { type: "step-start" },
-          { type: "step-finish", reason: "stop" },
-        ],
-      },
-    ]);
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0]?.id, "m1");
-  });
-
-  it("marks assistant done only when time.completed / finish set", () => {
-    const pending = mapHistoryToTimeline([
-      {
-        info: { id: "a1", role: "assistant", time: { created: 1 } },
-        parts: [{ type: "text", text: "working…" }],
-      },
-    ]);
-    assert.equal(pending[0]?.done, false);
-
-    const finished = mapHistoryToTimeline([
-      {
-        info: {
-          id: "a2",
-          role: "assistant",
-          finish: "stop",
-          time: { created: 1, completed: 2 },
+        sessionId: "acp-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "hello" },
         },
-        parts: [{ type: "text", text: "done" }],
       },
-    ]);
-    assert.equal(finished[0]?.done, true);
+      { helmSessionId: "helm-1" },
+    );
+    assert.equal(mapped.events[0]?.type, "session.message.delta");
+    assert.equal(mapped.events[0]?.sessionId, "helm-1");
+    assert.ok(mapped.timelineUpserts[0]?.text.includes("hello"));
   });
 
-  it("classifies reasoning vs answer vs tools", () => {
-    const entries = mapHistoryToTimeline([
-      {
-        info: { id: "r1", role: "assistant", finish: "stop", time: { completed: 1 } },
-        parts: [{ type: "reasoning", text: "I should check git status first" }],
+  it("maps tool_call updates", () => {
+    const mapped = mapAcpSessionUpdate({
+      sessionId: "acp-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t1",
+        title: "Read",
+        status: "pending",
       },
-      {
-        info: { id: "t1", role: "assistant", finish: "stop", time: { completed: 2 } },
-        parts: [
-          {
-            type: "tool",
-            tool: "bash",
-            state: {
-              status: "completed",
-              input: { command: "git status" },
-              output: "clean",
-            },
-          },
-          {
-            type: "patch",
-            hash: "abc",
-            files: ["src/a.ts", "src/b.ts"],
-          },
-        ],
-      },
-      {
-        info: { id: "a1", role: "assistant", finish: "stop", time: { completed: 3 } },
-        parts: [
-          { type: "reasoning", text: "Looks clean" },
-          { type: "text", text: "Rolled back the last edit." },
-        ],
-      },
-    ]);
-    assert.equal(entries.length, 3);
-    assert.equal(entries[0]?.kind, "reasoning");
-    assert.equal(entries[0]?.meta?.reasoning, "I should check git status first");
-    assert.equal(entries[1]?.kind, "tool");
-    assert.deepEqual(entries[1]?.meta?.tools, [
-      "Run git status",
-      "Edit src/a.ts",
-      "Edit src/b.ts",
-    ]);
-    const actions = entries[1]?.meta?.toolActions as
-      | Array<{ name: string; path?: string; content?: string }>
-      | undefined;
-    assert.equal(actions?.[0]?.name, "bash");
-    assert.match(actions?.[0]?.content ?? "", /git status/);
-    assert.match(actions?.[0]?.content ?? "", /clean/);
-    assert.equal(actions?.[1]?.path, "src/a.ts");
-    assert.equal(actions?.[2]?.path, "src/b.ts");
-    assert.equal(entries[2]?.kind, "message");
-    assert.equal(entries[2]?.text, "Rolled back the last edit.");
-    assert.equal(entries[2]?.meta?.answer, "Rolled back the last edit.");
-    assert.equal(entries[2]?.meta?.reasoning, "Looks clean");
+    });
+    assert.equal(mapped.events[0]?.type, "session.tool");
+    assert.equal(mapped.timelineUpserts[0]?.kind, "tool");
+    assert.equal(mapped.status, "running");
+  });
+});
+
+describe("mapStopReason", () => {
+  it("maps known stop reasons", () => {
+    assert.equal(mapStopReason("end_turn"), "completed");
+    assert.equal(mapStopReason("cancelled"), "cancelled");
+    assert.equal(mapStopReason("refusal"), "failed");
+  });
+});
+
+describe("pickAcpModeId", () => {
+  it("returns undefined when agent advertised no modes", () => {
+    assert.equal(pickAcpModeId("ask", []), undefined);
   });
 
-  it("includes edit path and content body from input", () => {
-    const entries = mapHistoryToTimeline([
-      {
-        info: { id: "e1", role: "assistant", finish: "stop", time: { completed: 1 } },
-        parts: [
-          {
-            type: "tool",
-            tool: "edit",
-            state: {
-              status: "completed",
-              input: {
-                filePath: "pkg/hello.go",
-                oldString: "foo",
-                newString: "bar",
-              },
-              title: "pkg/hello.go",
-              output: "Edit applied successfully.",
-            },
-          },
-        ],
-      },
-    ]);
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0]?.meta?.tools?.[0], "Edit pkg/hello.go");
-    const actions = entries[0]?.meta?.toolActions as
-      | Array<{ path?: string; content?: string; label: string }>
-      | undefined;
-    assert.equal(actions?.[0]?.path, "pkg/hello.go");
-    assert.match(actions?.[0]?.content ?? "", /^- foo$/m);
-    assert.match(actions?.[0]?.content ?? "", /^\+ bar$/m);
+  it("skips product ask when harness has no ask mode", () => {
+    assert.equal(pickAcpModeId("ask", ["build", "plan"]), undefined);
   });
 
-  it("uses OpenCode state.metadata.diff for edit expand body", () => {
-    const entries = mapHistoryToTimeline([
-      {
-        info: { id: "e2", role: "assistant", finish: "stop", time: { completed: 1 } },
-        parts: [
-          {
-            type: "tool",
-            tool: "edit",
-            state: {
-              status: "completed",
-              input: { filePath: "src/a.ts" },
-              title: "src/a.ts",
-              output: "Edit applied successfully.",
-              metadata: {
-                diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
-                filediff: {
-                  file: "src/a.ts",
-                  patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
-                  additions: 1,
-                  deletions: 1,
-                },
-              },
-            },
-          },
-        ],
-      },
-    ]);
-    const actions = entries[0]?.meta?.toolActions as
-      | Array<{ path?: string; content?: string }>
-      | undefined;
-    assert.equal(actions?.[0]?.path, "src/a.ts");
-    assert.match(actions?.[0]?.content ?? "", /\+new/);
-    assert.match(actions?.[0]?.content ?? "", /-old/);
+  it("maps agent to build when advertised", () => {
+    assert.equal(pickAcpModeId("agent", ["build", "plan"]), "build");
   });
 
-  it("falls back to filediff counts when diff body is missing", () => {
-    const entries = mapHistoryToTimeline([
-      {
-        info: { id: "e3", role: "assistant", finish: "stop", time: { completed: 1 } },
-        parts: [
-          {
-            type: "tool",
-            tool: "edit",
-            state: {
-              status: "completed",
-              input: { filePath: "only-counts.ts" },
-              title: "only-counts.ts",
-              output: "Edit applied successfully.",
-              metadata: {
-                filediff: { file: "only-counts.ts", additions: 4, deletions: 2 },
-              },
-            },
-          },
-        ],
-      },
-    ]);
-    const actions = entries[0]?.meta?.toolActions as
-      | Array<{ content?: string; path?: string }>
-      | undefined;
-    assert.equal(actions?.[0]?.path, "only-counts.ts");
-    assert.match(actions?.[0]?.content ?? "", /\+4 \/ -2/);
+  it("honors mode overlay when present", () => {
+    assert.equal(
+      pickAcpModeId("agent", ["code", "plan"], { agent: "code" }),
+      "code",
+    );
+  });
+});
+
+describe("resolvePermission", () => {
+  it("auto-allows when policy=allow", () => {
+    const res = resolvePermission("allow", {
+      options: [
+        { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+        { optionId: "reject", name: "Reject", kind: "reject_once" },
+      ],
+    });
+    assert.equal(res.outcome.outcome, "selected");
+    if (res.outcome.outcome === "selected") {
+      assert.equal(res.outcome.optionId, "allow-once");
+    }
   });
 
-  it("does not emit patch:patch noise when files missing", () => {
-    const entries = mapHistoryToTimeline([
-      {
-        info: { id: "p1", role: "assistant", finish: "stop", time: { completed: 1 } },
-        parts: [{ type: "patch", hash: "x" }],
-      },
-    ]);
-    // Empty shells are dropped entirely.
-    assert.equal(entries.length, 0);
+  it("cancels when policy=deny", () => {
+    const res = resolvePermission("deny", {
+      options: [{ optionId: "allow-once", kind: "allow_once" }],
+    });
+    assert.equal(res.outcome.outcome, "cancelled");
   });
 });

@@ -1,28 +1,32 @@
 /**
- * Materialize OpenCode provider credentials for managed `opencode serve`.
+ * Materialize OpenCode provider credentials for managed `opencode acp`.
  *
  * OpenCode reads API keys from:
  *   $HOME/.local/share/opencode/auth.json
  *
- * Shape (matches `/connect` / `opencode auth login` for type=api providers):
- *   { "<providerID>": { "type": "api", "key": "..." } }
- *
- * Go and Zen are separate providers (same account key may be used for both):
- *   OPENCODE_GO_API_KEY  → opencode-go
- *   OPENCODE_ZEN_API_KEY → opencode
- * At least one is required when OPENCODE_MANAGED=true.
+ * Configured via AGENT_PROVIDER + AGENT_API_KEY:
+ *   opencode-go  → auth.json `opencode-go`  / models `opencode-go/<model>`
+ *   opencode-zen → auth.json `opencode`     / models `opencode/<model>`
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AppConfig } from "../config.js";
-import type { Logger } from "../logger.js";
+import type { AppConfig } from "../../../config.js";
+import type { Logger } from "../../../logger.js";
+import type { OpenCodeHarnessSettings } from "./settings.js";
 
-/** OpenCode Go subscription catalog (`opencode-go/<model>`). */
-export const OPENCODE_GO_PROVIDER_ID = "opencode-go";
-/** OpenCode Zen pay-as-you-go catalog (`opencode/<model>`). */
-export const OPENCODE_ZEN_PROVIDER_ID = "opencode";
+/** Helm AGENT_PROVIDER values supported today. */
+export type AgentProviderId = "opencode-go" | "opencode-zen";
+
+/**
+ * Map Helm AGENT_PROVIDER → OpenCode auth.json / catalog provider id.
+ * Extend this table when adding providers.
+ */
+export const AGENT_PROVIDER_AUTH_IDS: Record<AgentProviderId, string> = {
+  "opencode-go": "opencode-go",
+  "opencode-zen": "opencode",
+};
 
 export interface OpenCodeAuthEntry {
   type: "api";
@@ -37,22 +41,30 @@ export interface OpenCodeAuthProviderSlot {
 }
 
 /**
- * Providers enabled by env keys (order: Go then Zen).
- * Empty when neither OPENCODE_GO_API_KEY nor OPENCODE_ZEN_API_KEY is set.
+ * Resolve the single configured provider slot from AGENT_PROVIDER + AGENT_API_KEY.
+ * Empty when either is unset (external / unconfigured managed will fail later).
  */
 export function resolveOpenCodeAuthProviders(
   config: AppConfig,
 ): OpenCodeAuthProviderSlot[] {
-  const slots: OpenCodeAuthProviderSlot[] = [];
-  const go = config.OPENCODE_GO_API_KEY?.trim();
-  const zen = config.OPENCODE_ZEN_API_KEY?.trim();
-  if (go) {
-    slots.push({ providerId: OPENCODE_GO_PROVIDER_ID, key: go });
+  const provider = config.AGENT_PROVIDER;
+  const key = config.AGENT_API_KEY?.trim();
+  if (!provider && !key) return [];
+  if (!provider) {
+    throw new Error(
+      "AGENT_PROVIDER is required when AGENT_API_KEY is set (e.g. opencode-go, opencode-zen)",
+    );
   }
-  if (zen) {
-    slots.push({ providerId: OPENCODE_ZEN_PROVIDER_ID, key: zen });
+  if (!key) {
+    throw new Error(
+      `AGENT_API_KEY is required when AGENT_PROVIDER=${provider}`,
+    );
   }
-  return slots;
+  const authId = AGENT_PROVIDER_AUTH_IDS[provider];
+  if (!authId) {
+    throw new Error(`Unsupported AGENT_PROVIDER: ${provider}`);
+  }
+  return [{ providerId: authId, key }];
 }
 
 /** Provider ids we materialize / should expose in the model catalog. */
@@ -65,9 +77,7 @@ export function buildOpenCodeAuthFile(
   slots: OpenCodeAuthProviderSlot[],
 ): OpenCodeAuthFile {
   if (slots.length === 0) {
-    throw new Error(
-      "At least one of OPENCODE_GO_API_KEY or OPENCODE_ZEN_API_KEY is required",
-    );
+    throw new Error("AGENT_PROVIDER and AGENT_API_KEY are required");
   }
   const file: OpenCodeAuthFile = {};
   for (const slot of slots) {
@@ -85,8 +95,10 @@ export function serializeOpenCodeAuthFile(file: OpenCodeAuthFile): string {
 }
 
 /** Resolve OpenCode "home" for auth/config (not the npm install prefix). */
-export function resolveOpenCodeHome(config: AppConfig): string {
-  const explicit = config.OPENCODE_HOME?.trim();
+export function resolveOpenCodeHome(
+  settings?: Pick<OpenCodeHarnessSettings, "home">,
+): string {
+  const explicit = settings?.home?.trim();
   if (explicit) return explicit;
   const envHome = process.env.HOME?.trim() || process.env.USERPROFILE?.trim();
   if (envHome) return envHome;
@@ -99,22 +111,23 @@ export function resolveOpenCodeAuthPath(home: string): string {
 }
 
 /**
- * Write auth.json from OPENCODE_GO_API_KEY / OPENCODE_ZEN_API_KEY before serve.
- * Throws if managed mode has no keys (local and prod both require at least one).
+ * Write auth.json from AGENT_PROVIDER + AGENT_API_KEY before spawning ACP.
+ * Throws if managed mode has no credentials.
  */
 export async function materializeOpenCodeAuth(
   config: AppConfig,
   logger?: Logger,
+  settings?: Pick<OpenCodeHarnessSettings, "home">,
 ): Promise<{ authPath: string; providerIds: string[] }> {
   const slots = resolveOpenCodeAuthProviders(config);
   if (slots.length === 0) {
     throw new Error(
-      "OPENCODE_GO_API_KEY and/or OPENCODE_ZEN_API_KEY is required when OPENCODE_MANAGED=true " +
-        "(OpenCode dashboard keys — not a host mount)",
+      "AGENT_PROVIDER and AGENT_API_KEY are required when SESSIONS_ENABLED=true " +
+        "(e.g. AGENT_PROVIDER=opencode-go)",
     );
   }
 
-  const home = resolveOpenCodeHome(config);
+  const home = resolveOpenCodeHome(settings);
   const authPath = resolveOpenCodeAuthPath(home);
   const file = buildOpenCodeAuthFile(slots);
   const body = serializeOpenCodeAuthFile(file);
@@ -126,7 +139,7 @@ export async function materializeOpenCodeAuth(
   logger?.info("opencode auth materialized", {
     authPath,
     providerIds,
-    // never log keys
+    agentProvider: config.AGENT_PROVIDER,
   });
 
   return { authPath, providerIds };

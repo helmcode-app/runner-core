@@ -1,7 +1,7 @@
 # runner-core
 
 Headless sandbox daemon for [HelmCode](https://github.com/helmcode-app):  
-**Node.js open-core** (agent sessions via OpenCode, VFS, terminal) + **Go VFS**.
+**Node.js open-core** (agent sessions via ACP → OpenCode, VFS, terminal) + **Go VFS**.
 
 ## Repository layout
 
@@ -33,12 +33,14 @@ iPad / client
 services/runner (Node)
     ├── modes/open-core/   routes + server
     ├── sessions/          public /v1/sessions/* (Helm DTOs)
-    ├── opencode/          adapter ──HTTP──► opencode serve (:4096)
+    ├── agent/             ACP Client + gateway ──stdio──► harness ACP Server
+    │                        default: opencode acp
     ├── terminal/          in-process PTY → WS /v1/terminal
     └── vfs/               ──stdio JSON-RPC──► services/vfs (helm-vfs)
 ```
 
-**Agent product path:** `/v1/sessions/*` → OpenCode. Model credentials live **inside OpenCode**, not in runner `LLM_*` (removed).
+**Agent product path:** `/v1/sessions/*` → Agent Gateway (ACP Client) → `opencode acp`.
+Model credentials live in the harness (`AGENT_PROVIDER` + `AGENT_API_KEY` → OpenCode auth.json).
 
 ## Quick start
 
@@ -76,22 +78,23 @@ docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 
 Full Docker notes: [`docs/testing-docker.md`](./docs/testing-docker.md).
 
-**OpenCode is not baked into the image.** With managed mode the runner installs
-`opencode-ai` at boot into `OPENCODE_PREFIX` and runs `opencode serve`. First
-managed boot needs outbound network. Persist `/app/.opencode` (compose.dev volume
-`dev-opencode`) so restarts skip the download.
+**OpenCode is not baked into the image.** When sessions are enabled the runner
+installs `opencode-ai` at boot (container: `/app/.opencode`; local: `~/.helm/opencode`)
+and runs `opencode acp`. First boot needs outbound network. Persist `/app/.opencode`
+(compose.dev volume `dev-opencode`) so restarts skip the download. Install knobs
+live in `services/runner/src/agent/harnesses/opencode/settings.ts`, not env.
 
-## Credentials & OpenCode
+## Credentials & agent (ACP)
 
 ```
 iPad / curl
     │  Authorization: Bearer <OPENCORE_API_TOKEN>   (optional if token empty)
     ▼
 runner  /v1/sessions/*  |  /v1/vfs  |  /v1/terminal
-    │  Authorization: Basic …                     if OPENCODE_SERVER_PASSWORD set
+    │  ACP (stdio ndjson)
     ▼
-opencode serve (:4096)   ← managed: started by runner after boot install
-    │  Provider API keys (Anthropic / OpenAI / …)
+opencode acp   ← managed: started by runner after boot install
+    │  Provider API keys (from auth.json)
     ▼
 LLM
 ```
@@ -99,16 +102,14 @@ LLM
 | Variable | Purpose |
 |----------|---------|
 | `OPENCORE_API_TOKEN` | Client → runner Bearer |
-| `OPENCODE_ENABLED` | Expose `/v1/sessions/*` |
-| `OPENCODE_MANAGED` | Install + spawn serve at boot |
-| `OPENCODE_GO_API_KEY` | OpenCode **Go** → `opencode-go` in auth.json (set alone for Go-only catalog) |
-| `OPENCODE_ZEN_API_KEY` | OpenCode **Zen** → `opencode` in auth.json |
-| `OPENCODE_VERSION` / `PREFIX` / `UPDATE_*` | Managed install knobs |
-| `OPENCODE_BASE_URL` | OpenCode HTTP base |
-| `OPENCODE_SERVER_PASSWORD` | Optional Basic to serve (not the model key) |
+| `SESSIONS_ENABLED` | Expose `/v1/sessions/*` and boot the harness ACP Server |
+| `AGENT_HARNESS` | ACP Server harness (`opencode`) |
+| `AGENT_PROVIDER` | LLM provider: `opencode-go` or `opencode-zen` |
+| `AGENT_API_KEY` | API key for `AGENT_PROVIDER` → OpenCode auth.json |
+| `AGENT_DEFAULT_MODEL` | Default `provider/model` when prompt omits `model` |
 
-Managed mode needs **at least one** of `OPENCODE_GO_API_KEY` / `OPENCODE_ZEN_API_KEY`.
-Model list only includes providers you configured (same key string may be used in both).
+Sessions require `AGENT_PROVIDER` + `AGENT_API_KEY`.
+Install / permission / extra-model knobs are code overlays, not env.
 
 ## Test Agent Sessions
 
@@ -116,22 +117,23 @@ Model list only includes providers you configured (same key string may be used i
 
 ```bash
 export HOST_REPO=/absolute/path/to/your/git/repo
-export OPENCODE_ENABLED=true
-export OPENCODE_MANAGED=true
-export OPENCODE_GO_API_KEY=oc-…   # Go subscription (or OPENCODE_ZEN_API_KEY for Zen)
-export OPENCODE_DEFAULT_MODEL=opencode-go/glm-5.1
+export SESSIONS_ENABLED=true
+export AGENT_HARNESS=opencode
+export AGENT_PROVIDER=opencode-go
+export AGENT_API_KEY=oc-…
+export AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 
 docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 ```
 
-Local process (same keys, no auth mount):
+Local process (same keys):
 
 ```bash
-export OPENCODE_ENABLED=true
-export OPENCODE_MANAGED=true
-export OPENCODE_GO_API_KEY=oc-…
-export OPENCODE_PREFIX=$PWD/.opencode-prefix
-export OPENCODE_DEFAULT_MODEL=opencode-go/glm-5.1
+export SESSIONS_ENABLED=true
+export AGENT_HARNESS=opencode
+export AGENT_PROVIDER=opencode-go
+export AGENT_API_KEY=oc-…
+export AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 npm start
 ```
 
@@ -149,7 +151,9 @@ curl -s -X POST http://127.0.0.1:8080/v1/sessions \
 |----------|-------------|
 | [docs/api/open-core.md](./docs/api/open-core.md) | open-core HTTP + auth |
 | [docs/api/sessions.md](./docs/api/sessions.md) | Agent sessions `/v1/sessions/*` |
-| [docs/api/opencode.md](./docs/api/opencode.md) | OpenCode adapter (internal) |
+| [docs/api/opencode.md](./docs/api/opencode.md) | Default ACP Server (OpenCode) |
+| [docs/design/acp-first-runtime.md](./docs/design/acp-first-runtime.md) | ACP Client / Server layout |
+| [docs/design/acp-and-goose.md](./docs/design/acp-and-goose.md) | Goose as a later optional harness |
 | [docs/api/vfs.md](./docs/api/vfs.md) | VFS protocol |
 | [docs/api/terminal.md](./docs/api/terminal.md) | Terminal WebSSH |
 | [docs/testing-docker.md](./docs/testing-docker.md) | Docker-only testing |

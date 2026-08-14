@@ -44,82 +44,31 @@ const envSchema = z.object({
   /** App-level heartbeat interval for terminal WS (ms). 0 disables. */
   TERMINAL_HEARTBEAT_MS: z.coerce.number().int().min(0).default(25_000),
 
-  // ── Agent sessions runtime (adapter: OpenCode Server today) ─
+  // ── Agent sessions (ACP Client → harness ACP Server) ───────
   /**
-   * When true, expose `/v1/sessions/*` via the session runtime adapter.
+   * When true, expose `/v1/sessions/*` via the Agent Gateway (ACP client).
    * Default false so unit tests / minimal boots stay quiet.
    */
-  OPENCODE_ENABLED: envBool(false),
+  SESSIONS_ENABLED: envBool(false),
   /**
-   * When true (and OPENCODE_ENABLED), runner installs/starts `opencode serve`
-   * at process boot and optionally refreshes on an interval.
-   * When false, connect to an external daemon at OPENCODE_BASE_URL.
+   * Which ACP Server harness to run/connect.
+   * First supported: `opencode` (`opencode acp` over stdio).
+   * Install/spawn knobs live in `agent/harnesses/<name>/settings.ts`, not env.
    */
-  OPENCODE_MANAGED: envBool(false),
-  /** Session runtime base URL (e.g. `opencode serve` on :4096). */
-  OPENCODE_BASE_URL: z.string().url().default("http://127.0.0.1:4096"),
-  /** Optional Basic auth password matching OPENCODE_SERVER_PASSWORD on the daemon. */
-  OPENCODE_SERVER_PASSWORD: z.string().optional(),
-  /** Basic auth username (default opencode). */
-  OPENCODE_SERVER_USERNAME: z.string().min(1).default("opencode"),
-  /** Non-SSE HTTP timeout to OpenCode (ms). */
-  OPENCODE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  AGENT_HARNESS: z.enum(["opencode"]).default("opencode"),
+  /**
+   * LLM provider id for harness auth + model catalog allow-list.
+   * Known values: `opencode-go`, `opencode-zen` (OpenCode auth.json ids).
+   * Required with AGENT_API_KEY when SESSIONS_ENABLED=true.
+   */
+  AGENT_PROVIDER: z.enum(["opencode-go", "opencode-zen"]).optional(),
+  /** API key for AGENT_PROVIDER (written to harness auth when sessions start). */
+  AGENT_API_KEY: z.string().optional(),
   /**
    * Default model string for prompts (e.g. `opencode-go/glm-5.1` or `opencode/big-pickle`).
-   * When unset, the sessions models catalog picks a preferred default among enabled providers.
+   * When unset, the models catalog picks a preferred default among configured providers.
    */
-  OPENCODE_DEFAULT_MODEL: z.string().optional(),
-  /**
-   * OpenCode **Go** subscription API key → auth.json provider `opencode-go`.
-   * Models: `opencode-go/<model>`. Set this alone if you only subscribe to Go.
-   */
-  OPENCODE_GO_API_KEY: z.string().optional(),
-  /**
-   * OpenCode **Zen** pay-as-you-go API key → auth.json provider `opencode`.
-   * Models: `opencode/<model>`. Same dashboard key string may be used for both vars
-   * if you intentionally enable both catalogs.
-   */
-  OPENCODE_ZEN_API_KEY: z.string().optional(),
-  /**
-   * Home directory used for OpenCode auth/config when managed.
-   * Default: process HOME / os.homedir(). Docker image uses /app for user helm.
-   */
-  OPENCODE_HOME: z.string().optional(),
-  /** OpenCode agent name for mode=agent (default build). */
-  OPENCODE_AGENT_NAME: z.string().optional(),
-  /** OpenCode agent name for mode=plan (default plan). */
-  OPENCODE_PLAN_AGENT: z.string().optional(),
-  /** OpenCode agent name for mode=ask (default ask). */
-  OPENCODE_ASK_AGENT: z.string().optional(),
-  /**
-   * npm dist-tag or semver for managed install (`opencode-ai@…`).
-   * Use `latest` for rolling updates; pin for reproducibility.
-   */
-  OPENCODE_VERSION: z.string().min(1).default("latest"),
-  /**
-   * Install prefix for `npm install -g --prefix` (binary at `$PREFIX/bin/opencode`).
-   * Must be writable by the runner user.
-   */
-  OPENCODE_PREFIX: z.string().min(1).default("/app/.opencode"),
-  /** Override path to opencode binary (default `$OPENCODE_PREFIX/bin/opencode`). */
-  OPENCODE_BIN: z.string().optional(),
-  /** Hostname for managed `opencode serve` (loopback only by default). */
-  OPENCODE_SERVE_HOSTNAME: z.string().min(1).default("127.0.0.1"),
-  /** Port for managed `opencode serve` (should match OPENCODE_BASE_URL). */
-  OPENCODE_SERVE_PORT: z.coerce.number().int().min(1).max(65535).default(4096),
-  /**
-   * Hours between managed update checks (`npm install` + restart).
-   * 0 disables periodic updates (install still runs once at boot).
-   */
-  OPENCODE_UPDATE_INTERVAL_HOURS: z.coerce.number().min(0).default(24),
-  /** Max time for a single npm install of opencode-ai (ms). */
-  OPENCODE_INSTALL_TIMEOUT_MS: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(600_000),
-  /** npm binary used for managed install (default `npm` on PATH). */
-  OPENCODE_NPM_BIN: z.string().min(1).default("npm"),
+  AGENT_DEFAULT_MODEL: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

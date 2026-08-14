@@ -53,9 +53,13 @@ Agent product API: [sessions.md](./sessions.md). VFS: [vfs.md](./vfs.md). Termin
   "mode": "open-core",
   "version": "0.1.0",
   "sessionsEnabled": true,
+  "agentHarness": "opencode",
+  "agentTransport": "stdio",
   "sessionsManaged": true,
   "authRequired": false,
   "vfsEnabled": true,
   "terminalEnabled": true
 }
 ```
+
+`agentHarness` is the ACP Server (`opencode` today). LLM vendor is `AGENT_PROVIDER`, not this field.

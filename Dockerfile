@@ -90,11 +90,10 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/helm-vfs ./cmd/hel
 FROM base AS runtime
 WORKDIR /app
 ENV HELM_VFS_BIN=/app/bin/helm-vfs \
-    VFS_ENABLED=true \
-    OPENCODE_PREFIX=/app/.opencode
-# OpenCode is NOT baked into the image. When OPENCODE_ENABLED+OPENCODE_MANAGED,
-# the runner runs `npm install -g --prefix $OPENCODE_PREFIX opencode-ai@…` at
-# first boot (and on the update interval). Prefix must be writable by `helm`.
+    VFS_ENABLED=true
+# OpenCode is NOT baked into the image. When SESSIONS_ENABLED, the runner
+# installs opencode-ai at boot into /app/.opencode (HOME=/app). Prefix must
+# be writable by `helm`. Override install knobs in harness settings.ts.
 RUN mkdir -p /app/main_repo /app/workspaces /app/remote.git /app/bin /app/.opencode \
     && useradd --system --uid 10001 --home /app --shell /usr/sbin/nologin helm \
     && chown -R helm:helm /app

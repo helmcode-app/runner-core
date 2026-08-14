@@ -2,17 +2,21 @@
 
 API contracts for the HelmCode open-core daemon.
 
+Default agent path: **`/v1/sessions/*` → ACP Client → OpenCode ACP Server** (`opencode acp`).
+
 | Document | Description |
 |----------|-------------|
 | [Open-core HTTP API](./api/open-core.md) | Standalone server on `:8080` (`HELM_MODE=open-core`) |
-| [Agent sessions](./api/sessions.md) | Product `/v1/sessions/*` (backend-agnostic) |
-| [OpenCode adapter](./api/opencode.md) | Internal runtime notes (not a public API) |
+| [Agent sessions](./api/sessions.md) | Product `/v1/sessions/*` |
+| [OpenCode ACP harness](./api/opencode.md) | Default ACP Server (internal) |
+| [ACP-first runtime](./design/acp-first-runtime.md) | Runner = ACP Client; harness = ACP Server |
+| [Goose (later)](./design/acp-and-goose.md) | Optional future harness — not the default proxy |
 | [VFS protocol](./api/vfs.md) | Go `helm-vfs` JSON-RPC + WebSocket `/v1/vfs` |
 | [Terminal WebSSH](./api/terminal.md) | In-process PTY over `WS /v1/terminal` |
 | [Testing in Docker](./testing-docker.md) | Docker-only test / smoke |
 
 Source of truth for runtime behavior:
 
-- Node: `services/runner/src/` (sessions, opencode, vfs, terminal)
+- Node: `services/runner/src/` (`sessions/`, `agent/`, `vfs/`, `terminal/`)
 - Go VFS: `services/vfs/`
 - Go WebSSH sidecar (optional): `services/webssh/`

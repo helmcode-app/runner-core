@@ -1,56 +1,69 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { loadConfig } from "../../src/config.js";
 import {
+  createHarnessRuntime,
   openCodePackageSpec,
   resolveOpenCodeBinaryPath,
-} from "../../src/opencode/runtime.js";
+  resolveOpenCodeHarnessSettings,
+} from "../../src/agent/index.js";
+import { loadConfig } from "../../src/config.js";
+import { testLogger } from "../helpers.js";
 
-describe("opencode runtime helpers", () => {
-  it("builds npm package specs", () => {
-    assert.equal(openCodePackageSpec("latest"), "opencode-ai@latest");
-    assert.equal(openCodePackageSpec("1.18.15"), "opencode-ai@1.18.15");
-    assert.equal(openCodePackageSpec("  next  "), "opencode-ai@next");
-  });
-
-  it("resolves binary under OPENCODE_PREFIX", () => {
-    const cfg = loadConfig({
-      OPENCODE_PREFIX: "/data/opencode",
+describe("OpenCode ACP harness settings", () => {
+  it("resolves binary under overlay prefix", () => {
+    const settings = resolveOpenCodeHarnessSettings({
+      prefix: "/data/opencode",
     });
     assert.equal(
-      resolveOpenCodeBinaryPath(cfg),
+      resolveOpenCodeBinaryPath(settings),
       "/data/opencode/bin/opencode",
     );
   });
 
-  it("OPENCODE_BIN overrides prefix path", () => {
-    const cfg = loadConfig({
-      OPENCODE_PREFIX: "/data/opencode",
-      OPENCODE_BIN: "/usr/local/bin/opencode",
+  it("bin overlay overrides prefix path", () => {
+    const settings = resolveOpenCodeHarnessSettings({
+      prefix: "/data/opencode",
+      bin: "/usr/local/bin/opencode",
     });
-    assert.equal(resolveOpenCodeBinaryPath(cfg), "/usr/local/bin/opencode");
+    assert.equal(resolveOpenCodeBinaryPath(settings), "/usr/local/bin/opencode");
   });
 
-  it("loads managed defaults", () => {
-    const cfg = loadConfig({
-      OPENCODE_ENABLED: "true",
-      OPENCODE_MANAGED: "true",
-    });
-    assert.equal(cfg.OPENCODE_ENABLED, true);
-    assert.equal(cfg.OPENCODE_MANAGED, true);
-    assert.equal(cfg.OPENCODE_VERSION, "latest");
-    assert.equal(cfg.OPENCODE_PREFIX, "/app/.opencode");
-    assert.equal(cfg.OPENCODE_SERVE_PORT, 4096);
-    assert.equal(cfg.OPENCODE_UPDATE_INTERVAL_HOURS, 24);
-    assert.equal(cfg.OPENCODE_INSTALL_TIMEOUT_MS, 600_000);
-    assert.equal(cfg.OPENCODE_GO_API_KEY, undefined);
-    assert.equal(cfg.OPENCODE_ZEN_API_KEY, undefined);
+  it("uses code defaults (not env) for install knobs", () => {
+    const settings = resolveOpenCodeHarnessSettings();
+    assert.equal(settings.version, "latest");
+    assert.equal(settings.updateIntervalHours, 24);
+    assert.equal(settings.installTimeoutMs, 600_000);
+    assert.equal(settings.packageName, "opencode-ai");
+    assert.ok(settings.prefix.length > 0);
   });
 
-  it("allows disabling periodic updates", () => {
+  it("parses session selection env only", () => {
     const cfg = loadConfig({
-      OPENCODE_UPDATE_INTERVAL_HOURS: "0",
+      SESSIONS_ENABLED: "true",
+      AGENT_HARNESS: "opencode",
     });
-    assert.equal(cfg.OPENCODE_UPDATE_INTERVAL_HOURS, 0);
+    assert.equal(cfg.SESSIONS_ENABLED, true);
+    assert.equal(cfg.AGENT_HARNESS, "opencode");
+  });
+
+  it("createHarnessRuntime is null when sessions are off", () => {
+    const cfg = loadConfig({ SESSIONS_ENABLED: "false" });
+    assert.equal(createHarnessRuntime(cfg, testLogger()), null);
+  });
+
+  it("createHarnessRuntime selects the OpenCode default", () => {
+    const cfg = loadConfig({
+      SESSIONS_ENABLED: "true",
+      AGENT_HARNESS: "opencode",
+    });
+    const runtime = createHarnessRuntime(cfg, testLogger());
+    assert.ok(runtime);
+    assert.equal(runtime.status.harness, "opencode");
+    assert.equal(runtime.status.transport, "stdio");
+  });
+
+  it("builds npm package spec", () => {
+    assert.equal(openCodePackageSpec("latest"), "opencode-ai@latest");
+    assert.equal(openCodePackageSpec("1.2.3"), "opencode-ai@1.2.3");
   });
 });

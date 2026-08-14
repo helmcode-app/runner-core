@@ -15,15 +15,14 @@
  *   POST   /v1/sessions/:id/unrevert
  *   GET    /v1/sessions/:id/diff
  *
- * Handlers: `./handlers.ts`. Adapter today: local OpenCode Server.
+ * Handlers: `./handlers.ts`. Runtime: Agent Gateway (ACP Client).
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AgentGateway } from "../agent/gateway.js";
 import type { AppConfig } from "../config.js";
 import { sendJson } from "../http/index.js";
 import type { Logger } from "../logger.js";
-import type { OpenCodeClient } from "../opencode/client.js";
-import type { ManagedOpenCodeRuntime } from "../opencode/runtime.js";
 import { sendSessionError } from "./errors.js";
 import {
   handleAbort,
@@ -44,10 +43,8 @@ import { proxySessionEvents } from "./sse.js";
 
 export interface SessionRouteContext {
   config: AppConfig;
-  /** Active runtime client; null when sessions feature is off. */
-  client: OpenCodeClient | null;
-  /** Present when OPENCODE_MANAGED (install at boot + periodic update). */
-  managedOpenCode?: ManagedOpenCodeRuntime | null;
+  /** Agent gateway when sessions are enabled. */
+  gateway: AgentGateway | null;
   logger: Logger;
 }
 
@@ -66,14 +63,14 @@ export async function handleSessionHttp(
 ): Promise<boolean> {
   if (!pathname.startsWith("/v1/sessions")) return false;
 
-  if (!ctx.config.OPENCODE_ENABLED) {
+  if (!ctx.config.SESSIONS_ENABLED) {
     sendJson(res, 503, {
-      error: "Agent sessions disabled (set OPENCODE_ENABLED=true)",
+      error: "Agent sessions disabled (set SESSIONS_ENABLED=true)",
     });
     return true;
   }
 
-  if (!ctx.client) {
+  if (!ctx.gateway) {
     sendJson(res, 503, { error: "Agent session runtime not configured" });
     return true;
   }
@@ -81,11 +78,8 @@ export async function handleSessionHttp(
   const log = ctx.logger.child({ component: "sessions" });
   const hctx: SessionHandlerContext = {
     config: ctx.config,
-    client: ctx.client,
+    gateway: ctx.gateway,
     logger: log,
-    ...(ctx.managedOpenCode !== undefined
-      ? { managedOpenCode: ctx.managedOpenCode }
-      : {}),
   };
 
   try {
@@ -98,7 +92,7 @@ export async function handleSessionHttp(
     }
 
     if (method === "GET" && pathname === "/v1/sessions/events") {
-      await proxySessionEvents(ctx.client, req, res, log);
+      await proxySessionEvents(ctx.gateway, req, res, log);
       return true;
     }
 

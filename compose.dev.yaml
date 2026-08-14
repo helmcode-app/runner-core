@@ -5,7 +5,7 @@
 #        export HOST_REPO=/Users/you/Developer/src/github.com/org/my-repo
 #      or put HOST_REPO=... in runner-core/.env
 #   2. Optional secrets / overrides in runner-core/.env (auto-loaded if present):
-#        OPENCODE_GO_API_KEY and/or OPENCODE_ZEN_API_KEY, OPENCORE_API_TOKEN, …
+#        AGENT_PROVIDER, AGENT_API_KEY, OPENCORE_API_TOKEN, …
 #   3. Start:
 #        docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 #   4. Probe:
@@ -22,7 +22,7 @@
 #   - Agent worktrees use a separate volume (/app/workspaces), not the host mount.
 #   - Compose only pins container-layout + a few dev defaults. Everything else
 #     comes from the image/config.ts defaults or from .env (see env_file).
-#   - Agent sessions: OPENCODE_ENABLED=true in .env (MANAGED defaults on below).
+#   - Agent sessions: SESSIONS_ENABLED=true in .env (harness installs from code defaults).
 #   - Stop: docker compose -f compose.yaml -f compose.dev.yaml down
 
 services:
@@ -51,12 +51,10 @@ services:
       TERMINAL_ENABLED: ${TERMINAL_ENABLED:-true}
       TERMINAL_WORKDIR: /app/main_repo
 
-      # Sessions: opt-in via OPENCODE_ENABLED; managed install is the
-      # container path (install at boot into the volume below).
-      # Other OPENCODE_* (VERSION, PREFIX, ports, …) use config defaults
-      # unless you set them in .env.
-      OPENCODE_ENABLED: ${OPENCODE_ENABLED:-false}
-      OPENCODE_MANAGED: ${OPENCODE_MANAGED:-true}
+      # Sessions: opt-in via SESSIONS_ENABLED. Harness install knobs are
+      # code defaults (agent/harnesses/opencode/settings.ts), not env.
+      SESSIONS_ENABLED: ${SESSIONS_ENABLED:-false}
+      AGENT_HARNESS: ${AGENT_HARNESS:-opencode}
     volumes:
       # ------------------------------------------------------------------
       # Repo entrypoint: host path → container MAIN_REPO_PATH

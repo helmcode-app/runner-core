@@ -14,6 +14,7 @@ import type {
   SessionMode,
   SessionStatus,
   SessionStreamEvent,
+  SessionUsage,
   TimelineEntry,
 } from "../sessions/types.js";
 import type { AcpConnection } from "./acp/connection.js";
@@ -23,7 +24,21 @@ import {
 } from "./checkpoint.js";
 import { AgentNotFoundError, AgentRuntimeError } from "./errors.js";
 import type { HarnessRuntime } from "./harnesses/types.js";
-import { mapAcpSessionUpdate, mapStopReason } from "./map-updates.js";
+import {
+  DEFAULT_CONTEXT_SIZE,
+  mapAcpSessionUpdate,
+  mapStopReason,
+  usageFromPromptResult,
+} from "./map-updates.js";
+import {
+  fastSetConfig,
+  modelIdsFromConfigOptions,
+  modelSetConfig,
+  parseConfigOptions,
+  thinkLevelSetConfig,
+  type HelmConfigOption,
+  type SetConfigPayload,
+} from "./session-config.js";
 import { loadAgentModelsCatalog, type ModelsCatalog } from "./models.js";
 import {
   formatSeedContext,
@@ -50,6 +65,10 @@ export interface GatewaySessionRecord {
   seedContext?: string;
   /** ACP mode ids advertised by `session/new`. */
   availableModeIds: string[];
+  /** ACP config options from session/new or config_option_update. */
+  configOptions: HelmConfigOption[];
+  /** Latest ACP usage_update. */
+  usage?: SessionUsage;
   /** In-flight prompt abort via ACP cancel. */
   promptAbort?: AbortController | undefined;
 }
@@ -95,6 +114,8 @@ export class AgentGateway {
     string,
     { id: string; text: string; role: TimelineEntry["role"]; kind: TimelineEntry["kind"] }
   >();
+  /** Harness-advertised `provider/model` ids from ACP configOptions. */
+  private discoveredModels: string[] = [];
 
   constructor(
     private readonly config: AppConfig,
@@ -123,6 +144,20 @@ export class AgentGateway {
     if (mapped.status) {
       record.status = mapped.status;
       record.updatedAt = new Date().toISOString();
+    }
+    if (mapped.usage) {
+      record.usage = mapped.usage;
+      record.updatedAt = new Date().toISOString();
+      this.logger.info("session usage", {
+        sessionId: helmId,
+        used: mapped.usage.used,
+        size: mapped.usage.size,
+        cost: mapped.usage.cost,
+      });
+    }
+    if (mapped.configOptions && mapped.configOptions.length > 0) {
+      record.configOptions = mapped.configOptions;
+      this.rememberDiscoveredModels(mapped.configOptions);
     }
 
     for (const entry of mapped.timelineUpserts) {
@@ -163,7 +198,11 @@ export class AgentGateway {
   }
 
   async models(forceRefresh = false): Promise<ModelsCatalog> {
-    return loadAgentModelsCatalog(this.config, { forceRefresh });
+    const discovered = await this.discoverHarnessModels(forceRefresh);
+    return loadAgentModelsCatalog(this.config, {
+      forceRefresh,
+      discoveredModels: discovered,
+    });
   }
 
   async createSession(input?: {
@@ -189,11 +228,23 @@ export class AgentGateway {
       timeline: [],
       checkpoints: [],
       availableModeIds: opened.availableModeIds,
+      configOptions: opened.configOptions,
+      usage: { used: 0, size: DEFAULT_CONTEXT_SIZE },
     };
     this.sessions.set(helmId, record);
     this.byAcpId.set(opened.acpSessionId, helmId);
+    this.rememberDiscoveredModels(opened.configOptions);
 
     await this.applyMode(record, "agent");
+    this.logger.info("acp session config", {
+      sessionId: helmId,
+      options: record.configOptions.map((o) => ({
+        id: o.id,
+        type: o.type,
+        category: o.category,
+        values: o.type === "select" ? o.values : undefined,
+      })),
+    });
 
     this.emit({
       type: "session.created",
@@ -247,6 +298,7 @@ export class AgentGateway {
 
     const conn = this.getConnection();
     await this.applyMode(record, mode);
+    await this.applyPromptConfig(record, body);
 
     const now = new Date().toISOString();
     const userId = `user_${randomUUID()}`;
@@ -315,17 +367,17 @@ export class AgentGateway {
     // Fire-and-forget ACP prompt (blocks until turn completes on agent side).
     void (async () => {
       try {
+        const helm: Record<string, unknown> = { mode };
+        if (model) helm.model = model;
+        const thinkLevel = body.thinkLevel?.trim();
+        if (thinkLevel) helm.thinkLevel = thinkLevel;
+        if (typeof body.fast === "boolean") helm.fast = body.fast;
         const result = (await conn.request(acp.methods.agent.session.prompt, {
           sessionId: record.acpSessionId,
           prompt: content,
-          ...(model
-            ? {
-                _meta: {
-                  helm: { model, mode },
-                },
-              }
-            : {}),
-        })) as { stopReason?: string };
+          _meta: { helm },
+        })) as { stopReason?: string; usage?: Record<string, unknown> };
+        this.applyPromptUsage(record, result);
         this.finalizeTurn(record, mapStopReason(result.stopReason));
         this.emit({
           type: "session.turn.completed",
@@ -377,6 +429,7 @@ export class AgentGateway {
     sessionId: string;
     session: AgentSession;
     entries: TimelineEntry[];
+    usage?: SessionUsage;
   } {
     const record = this.require(helmId);
     let entries = record.timeline;
@@ -387,6 +440,7 @@ export class AgentGateway {
       sessionId: helmId,
       session: this.toAgentSession(record),
       entries,
+      ...(record.usage !== undefined ? { usage: record.usage } : {}),
     };
   }
 
@@ -467,6 +521,9 @@ export class AgentGateway {
       const opened = await this.openAcpSession(record.cwd);
       record.acpSessionId = opened.acpSessionId;
       record.availableModeIds = opened.availableModeIds;
+      record.configOptions = opened.configOptions;
+      record.usage = { used: 0, size: DEFAULT_CONTEXT_SIZE };
+      this.rememberDiscoveredModels(opened.configOptions);
       this.byAcpId.set(opened.acpSessionId, helmId);
       await this.applyMode(record, "agent");
     }
@@ -630,6 +687,7 @@ export class AgentGateway {
   private async openAcpSession(cwd: string): Promise<{
     acpSessionId: string;
     availableModeIds: string[];
+    configOptions: HelmConfigOption[];
   }> {
     const created = await this.getConnection().request(
       acp.methods.agent.session.new,
@@ -638,7 +696,11 @@ export class AgentGateway {
     const availableModeIds = (created.modes?.availableModes ?? [])
       .map((m) => m.id)
       .filter((id): id is string => typeof id === "string" && id.length > 0);
-    return { acpSessionId: created.sessionId, availableModeIds };
+    return {
+      acpSessionId: created.sessionId,
+      availableModeIds,
+      configOptions: parseConfigOptions(created.configOptions),
+    };
   }
 
   private async closeAcpSession(acpSessionId: string): Promise<void> {
@@ -688,6 +750,123 @@ export class AgentGateway {
     }
   }
 
+  private async applyPromptConfig(
+    record: GatewaySessionRecord,
+    body: PromptRequest,
+  ): Promise<void> {
+    const payloads: SetConfigPayload[] = [];
+    const modelId = body.model?.trim();
+    if (modelId) {
+      const payload = modelSetConfig(record.configOptions, modelId);
+      if (payload) payloads.push(payload);
+      else {
+        this.logger.info("session model config unmatched", {
+          sessionId: record.helmId,
+          model: modelId,
+          optionIds: record.configOptions.map((o) => o.id),
+        });
+      }
+    }
+    const thinkLevel = body.thinkLevel?.trim();
+    if (thinkLevel) {
+      const payload = thinkLevelSetConfig(record.configOptions, thinkLevel);
+      if (payload) payloads.push(payload);
+      else {
+        this.logger.info("session thinkLevel config unmatched", {
+          sessionId: record.helmId,
+          thinkLevel,
+          optionIds: record.configOptions.map((o) => o.id),
+        });
+      }
+    }
+    if (typeof body.fast === "boolean") {
+      const payload = fastSetConfig(record.configOptions, body.fast);
+      if (payload) payloads.push(payload);
+    }
+    if (payloads.length === 0) return;
+    const conn = this.getConnection();
+    for (const payload of payloads) {
+      try {
+        await conn.request(acp.methods.agent.session.setConfigOption, {
+          sessionId: record.acpSessionId,
+          ...payload,
+        });
+      } catch (err) {
+        this.logger.debug("session setConfigOption skipped", {
+          configId: payload.configId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  private applyPromptUsage(
+    record: GatewaySessionRecord,
+    result: { usage?: Record<string, unknown> },
+  ): void {
+    if (!result.usage) return;
+    const next = usageFromPromptResult(
+      { usage: result.usage },
+      record.usage,
+    );
+    if (!next) return;
+    const current = record.usage;
+    if (current && current.used > 0) return;
+    record.usage = next;
+    record.updatedAt = new Date().toISOString();
+    this.emit({
+      type: "session.usage",
+      at: record.updatedAt,
+      sessionId: record.helmId,
+      data: next,
+    });
+    this.logger.info("session usage from prompt result", {
+      sessionId: record.helmId,
+      used: next.used,
+      size: next.size,
+    });
+  }
+
+  private rememberDiscoveredModels(options: HelmConfigOption[]): void {
+    const ids = modelIdsFromConfigOptions(options);
+    if (ids.length === 0) return;
+    this.discoveredModels = ids;
+  }
+
+  private async discoverHarnessModels(forceRefresh: boolean): Promise<string[]> {
+    if (!forceRefresh && this.discoveredModels.length > 0) {
+      return this.discoveredModels;
+    }
+    const fromSessions: string[] = [];
+    const seen = new Set<string>();
+    for (const record of this.sessions.values()) {
+      for (const id of modelIdsFromConfigOptions(record.configOptions)) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        fromSessions.push(id);
+      }
+    }
+    if (!forceRefresh && fromSessions.length > 0) {
+      this.discoveredModels = fromSessions;
+      return fromSessions;
+    }
+    try {
+      const opened = await this.openAcpSession(this.resolveSessionCwd());
+      const ids = modelIdsFromConfigOptions(opened.configOptions);
+      await this.closeAcpSession(opened.acpSessionId);
+      if (ids.length > 0) this.discoveredModels = ids;
+      this.logger.info("discovered harness models", { count: ids.length });
+      return this.discoveredModels;
+    } catch (err) {
+      this.logger.debug("harness model discovery skipped", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return this.discoveredModels.length > 0
+        ? this.discoveredModels
+        : fromSessions;
+    }
+  }
+
   private require(helmId: string): GatewaySessionRecord {
     const record = this.sessions.get(helmId);
     if (!record) throw new AgentNotFoundError(helmId);
@@ -706,6 +885,7 @@ export class AgentGateway {
       ...(record.availableModeIds.length > 0
         ? { modes: record.availableModeIds }
         : {}),
+      ...(record.usage !== undefined ? { usage: record.usage } : {}),
     };
   }
 

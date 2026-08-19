@@ -47,4 +47,41 @@ describe("agent models catalog", () => {
     assert.deepEqual(catalog.connected, ["anthropic"]);
     assert.equal(catalog.defaultModel, "anthropic/claude-sonnet-4-6");
   });
+
+  it("merges harness-discovered models ahead of placeholders", async () => {
+    clearModelsCatalogCache();
+    const cfg = loadConfig({
+      AGENT_PROVIDER: "opencode-go",
+      AGENT_API_KEY: "k",
+      AGENT_DEFAULT_MODEL: "opencode-go/glm-5.1",
+    });
+    const catalog = await loadAgentModelsCatalog(cfg, {
+      forceRefresh: true,
+      discoveredModels: [
+        "opencode-go/glm-5.1",
+        "opencode-go/glm-5.2",
+        "opencode-go/kimi-k2.6",
+        "opencode/big-pickle",
+      ],
+    });
+    const ids = catalog.models.map((m) => m.id);
+    assert.deepEqual(
+      ids.filter((id) =>
+        [
+          "opencode-go/glm-5.1",
+          "opencode-go/glm-5.2",
+          "opencode-go/kimi-k2.6",
+          "opencode/big-pickle",
+        ].includes(id),
+      ),
+      [
+        "opencode-go/glm-5.1",
+        "opencode-go/glm-5.2",
+        "opencode-go/kimi-k2.6",
+        "opencode/big-pickle",
+      ],
+    );
+    assert.equal(catalog.defaultModel, "opencode-go/glm-5.1");
+    assert.ok(catalog.models.length >= 4);
+  });
 });

@@ -82,7 +82,14 @@ export {
   clearModelsCatalogCache,
   loadAgentModelsCatalog,
 } from "./models.js";
-export { mapAcpSessionUpdate, mapStopReason } from "./map-updates.js";
+export { mapAcpSessionUpdate, mapStopReason, parseSessionUsage, usageFromPromptResult } from "./map-updates.js";
+export {
+  fastSetConfig,
+  modelIdsFromConfigOptions,
+  modelSetConfig,
+  parseConfigOptions,
+  thinkLevelSetConfig,
+} from "./session-config.js";
 export { resolvePermission } from "./permissions.js";
 export {
   captureWorkspaceCheckpoint,

@@ -112,6 +112,11 @@ export async function connectAcpClient(options: {
               readTextFile: false,
               writeTextFile: false,
             },
+            session: {
+              configOptions: {
+                boolean: {},
+              },
+            },
           },
         });
         protocolVersion = init.protocolVersion ?? acp.PROTOCOL_VERSION;

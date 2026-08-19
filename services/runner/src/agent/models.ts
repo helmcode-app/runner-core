@@ -1,8 +1,8 @@
 /**
  * Models catalog for ACP agent gateway.
  *
- * Until harness provider discovery is wired, advertise configured
- * AGENT_DEFAULT_MODEL + extraModels + the connected provider for this harness.
+ * Prefer harness-advertised ids (ACP session `configOptions`). Fall back to
+ * AGENT_DEFAULT_MODEL + extraModels when discovery has not run yet.
  */
 
 import type { AppConfig } from "../config.js";
@@ -17,16 +17,41 @@ export type { SessionModel, SessionModelsResponse };
 export type SessionModelInfo = SessionModel;
 export type ModelsCatalog = SessionModelsResponse;
 
-let cached: { at: number; catalog: ModelsCatalog } | null = null;
+let cached: { at: number; catalog: ModelsCatalog; key: string } | null = null;
 const CACHE_MS = 30_000;
+
+function catalogCacheKey(
+  config: AppConfig,
+  discovered: string[],
+  extraModels: string[],
+): string {
+  return [
+    config.AGENT_HARNESS,
+    config.AGENT_PROVIDER,
+    config.AGENT_DEFAULT_MODEL,
+    discovered.join(","),
+    extraModels.join(","),
+  ].join("|");
+}
 
 export async function loadAgentModelsCatalog(
   config: AppConfig,
-  opts?: { forceRefresh?: boolean; settings?: Partial<AgentSettings> },
+  opts?: {
+    forceRefresh?: boolean;
+    settings?: Partial<AgentSettings>;
+    discoveredModels?: string[];
+  },
 ): Promise<ModelsCatalog> {
+  const extraModels = resolveAgentSettings(opts?.settings).extraModels;
+  const discovered = (opts?.discoveredModels ?? [])
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const key = catalogCacheKey(config, discovered, extraModels);
+
   if (
     !opts?.forceRefresh &&
     cached &&
+    cached.key === key &&
     Date.now() - cached.at < CACHE_MS
   ) {
     return cached.catalog;
@@ -56,7 +81,10 @@ export async function loadAgentModelsCatalog(
     add(config.AGENT_DEFAULT_MODEL, true);
   }
 
-  const extraModels = resolveAgentSettings(opts?.settings).extraModels;
+  for (const id of discovered) {
+    add(id, true);
+  }
+
   for (const part of extraModels) {
     add(part, true);
   }
@@ -78,7 +106,7 @@ export async function loadAgentModelsCatalog(
     connected,
     ...(defaultModel !== undefined ? { defaultModel } : {}),
   };
-  cached = { at: Date.now(), catalog };
+  cached = { at: Date.now(), catalog, key };
   return catalog;
 }
 

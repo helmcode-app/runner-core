@@ -15,6 +15,22 @@ export type SessionStatus =
   | "cancelled"
   | "unknown";
 
+/** Cumulative session cost from ACP `usage_update`. */
+export interface SessionUsageCost {
+  amount: number;
+  currency: string;
+}
+
+/** Context window + optional cost (ACP `usage_update`). */
+export interface SessionUsage {
+  used: number;
+  size: number;
+  cost?: SessionUsageCost;
+}
+
+/** Reasoning effort on `POST /v1/sessions/:id/prompt`. */
+export type ThinkLevel = "low" | "medium" | "high" | "xhigh";
+
 export interface AgentSession {
   id: string;
   title?: string;
@@ -27,6 +43,8 @@ export interface AgentSession {
   modes?: string[];
   /** Workspace this session edits (default `default` = MAIN_REPO_PATH). */
   workspaceId?: string;
+  /** Latest ACP `usage_update` snapshot. */
+  usage?: SessionUsage;
 }
 
 /** One node in the reconnectable timeline. */
@@ -92,6 +110,10 @@ export interface PromptRequest {
   contextPaths?: string[];
   system?: string;
   messageId?: string;
+  /** ACP thought/reasoning level (`session/set_config_option` + `_meta.helm`). */
+  thinkLevel?: ThinkLevel | string;
+  /** Faster inference when true (`session/set_config_option` + `_meta.helm`). */
+  fast?: boolean;
 }
 
 export interface PromptAccepted {
@@ -105,6 +127,8 @@ export interface SessionHistoryResponse {
   sessionId: string;
   session?: AgentSession;
   entries: TimelineEntry[];
+  /** Session-level context window + cost (ACP `usage_update`). */
+  usage?: SessionUsage;
 }
 
 /** POST /v1/sessions/:id/cancel → ACP `session/cancel`. */

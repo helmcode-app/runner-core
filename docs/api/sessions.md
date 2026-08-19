@@ -72,10 +72,14 @@ File diffs / branch checkout stay on VFS (`vfs/gitDiff`, `vfs/gitCheckout`).
 
 ### Models (`GET /v1/sessions/models`)
 
+Catalog comes from the harness ACP `configOptions` (OpenCode model selector),
+plus `AGENT_DEFAULT_MODEL`. `?refresh=1` re-probes the harness.
+
 ```json
 {
   "models": [
-    { "id": "opencode-go/glm-5.1", "name": "glm-5.1", "provider": "opencode-go", "connected": true }
+    { "id": "opencode-go/glm-5.1", "name": "glm-5.1", "provider": "opencode-go", "connected": true },
+    { "id": "opencode-go/kimi-k2.6", "name": "kimi-k2.6", "provider": "opencode-go", "connected": true }
   ],
   "connected": ["opencode-go"],
   "defaultModel": "opencode-go/glm-5.1"
@@ -83,6 +87,39 @@ File diffs / branch checkout stay on VFS (`vfs/gitDiff`, `vfs/gitCheckout`).
 ```
 
 `AgentSession` may include `modes` (ACP ids advertised at `session/new`).
+
+### Prompt (`POST /v1/sessions/:id/prompt`)
+
+```json
+{
+  "prompt": "Fix the failing test",
+  "model": "opencode-go/glm-5.1",
+  "mode": "agent",
+  "thinkLevel": "medium",
+  "fast": false
+}
+```
+
+| Field | Notes |
+|-------|--------|
+| `thinkLevel` | `low` / `medium` / `high` / `xhigh`. Mapped to ACP `session/set_config_option` (`thought_level`) when the harness advertises it; also sent on `_meta.helm`. |
+| `fast` | Boolean. Mapped to a `fast` / `model_config` option when advertised; also sent on `_meta.helm`. |
+
+### Usage (`GET /v1/sessions/:id/history`, `AgentSession.usage`)
+
+ACP `usage_update` is stored on the session and returned as:
+
+```json
+{
+  "usage": {
+    "used": 53000,
+    "size": 200000,
+    "cost": { "amount": 0.045, "currency": "USD" }
+  }
+}
+```
+
+Live SSE event type is `session.usage` with the same payload.
 
 ### Create → prompt → events
 

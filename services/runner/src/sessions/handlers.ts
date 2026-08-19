@@ -103,6 +103,8 @@ export async function handlePrompt(
     sessionId,
     mode: body.mode ?? "agent",
     model: body.model ?? ctx.config.AGENT_DEFAULT_MODEL,
+    thinkLevel: body.thinkLevel,
+    fast: body.fast,
     promptLen: body.prompt?.length ?? 0,
   });
   const accepted = await ctx.gateway.submitPrompt(sessionId, body);
@@ -136,6 +138,7 @@ export async function handleHistory(
     sessionId: hist.sessionId,
     entries: hist.entries,
     session: hist.session,
+    ...(hist.usage !== undefined ? { usage: hist.usage } : {}),
   };
   sendJson(res, 200, payload);
   return true;

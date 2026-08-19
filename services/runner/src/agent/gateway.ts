@@ -17,6 +17,7 @@ import type {
   SessionUsage,
   TimelineEntry,
 } from "../sessions/types.js";
+import { maybeTitleFromTimeline } from "../sessions/title.js";
 import type { AcpConnection } from "./acp/connection.js";
 import {
   captureWorkspaceCheckpoint,
@@ -326,6 +327,8 @@ export class AgentGateway {
       done: true,
     };
     record.timeline.push(userEntry);
+    const previousTitle = record.title;
+    this.hydrateTitle(record);
     record.status = "running";
     record.updatedAt = now;
     this.emit({
@@ -334,6 +337,14 @@ export class AgentGateway {
       sessionId: helmId,
       data: userEntry,
     });
+    if (record.title && record.title !== previousTitle) {
+      this.emit({
+        type: "session.updated",
+        at: now,
+        sessionId: helmId,
+        data: { title: record.title },
+      });
+    }
     this.emit({
       type: "session.status",
       at: now,
@@ -873,7 +884,15 @@ export class AgentGateway {
     return record;
   }
 
+  /** Fill a placeholder title from the first user message. */
+  private hydrateTitle(record: GatewaySessionRecord): void {
+    const next = maybeTitleFromTimeline(record.title, record.timeline);
+    if (next === undefined || next === record.title) return;
+    record.title = next;
+  }
+
   private toAgentSession(record: GatewaySessionRecord): AgentSession {
+    this.hydrateTitle(record);
     return {
       id: record.helmId,
       ...(record.title !== undefined ? { title: record.title } : {}),

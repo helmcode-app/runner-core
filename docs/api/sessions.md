@@ -127,8 +127,8 @@ Live SSE event type is `session.usage` with the same payload.
 cwd, rewind snapshots, and `AgentSession.workspaceId` follow that workspace.
 
 1. `POST /v1/sessions` → ACP `session/new` → Helm `{ session }` (**201**)
-2. `POST …/prompt` → ACP `session/prompt` in background → **202**
-3. Live: `GET /v1/sessions/events` → Gateway SSE (`session.connected`, message/tool deltas, status)
+2. `POST …/prompt` → ACP `session/prompt` in background → **202**. The first user prompt becomes `session.title` when the current title is still a placeholder (`New chat`, empty, …). Later prompts do not rename it.
+3. Live: `GET /v1/sessions/events` → Gateway SSE (`session.connected`, message/tool deltas, status, `session.updated`)
 4. Reconnect: `GET …/history` then reopen events
 5. Stop: `POST …/cancel` → ACP `session/cancel`
 
@@ -139,6 +139,7 @@ cwd, rewind snapshots, and `AgentSession.workspaceId` follow that workspace.
 | Path | Role |
 |------|------|
 | `src/sessions/` | Product HTTP/SSE |
+| `src/sessions/title.ts` | Chat name from first user prompt |
 | `src/agent/` | ACP client, gateway, permission / models |
 | `src/agent/harnesses/create.ts` | `AGENT_HARNESS` → stdio supervisor |
 | `src/agent/harnesses/catalog.ts` | Harness specs (provider policy, spawn, auth) |

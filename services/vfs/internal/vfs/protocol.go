@@ -33,6 +33,8 @@ const (
 	ChangeCreate ChangeType = "create"
 	ChangeRemove ChangeType = "remove"
 	ChangeRename ChangeType = "rename"
+	// ChangeSync is a coalesced bulk-worktree signal (path is ".").
+	ChangeSync ChangeType = "sync"
 )
 
 // DidChangeParams is the payload for vfs/didChange notifications.

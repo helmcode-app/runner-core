@@ -21,7 +21,7 @@ export const VFS_DEFAULT_CHUNK_LIMIT = 64 * 1024;
 
 export type VfsMethodName = (typeof VfsMethod)[keyof typeof VfsMethod];
 
-export type VfsChangeType = "write" | "create" | "remove" | "rename";
+export type VfsChangeType = "write" | "create" | "remove" | "rename" | "sync";
 
 export type VfsEntryType = "file" | "dir";
 

@@ -38,7 +38,8 @@ internal/vfs/
   git_diff.go       # unified diff + git show
   git_checkout.go   # switch / track / detach
   tree.go           # WalkDir scan
-  watcher.go        # fsnotify → didChange
+  watcher.go        # fsnotify → coalesced didChange
+  coalescer.go      # idle-window / bulk `sync`
   paths.go          # safe path join
   ignore.go         # .git / node_modules
   write.go          # atomic write
@@ -140,8 +141,14 @@ Atomic write via temp file + rename.
 {"jsonrpc":"2.0","method":"vfs/didChange","params":{"path":"pkg/a.go","type":"write"}}
 ```
 
-`type`: `write` | `create` | `remove` | `rename`  
+`type`: `write` | `create` | `remove` | `rename` | `sync`  
 Source: native `fsnotify` (inotify on Linux).
+
+`.git` is not in the file tree. helm-vfs still watches **`.git/HEAD`** so a Terminal `git switch` / `git checkout` notifies the client even when the worktree is unchanged. Sidebar SCM refreshes from that event.
+
+Worktree events are **coalesced**: after ~120ms of quiet, a small burst is forwarded as-is; 16+ events in one window collapse to a single `{path:".","type":"sync"}`. The client should then `vfs/initialize` once and re-read only already-open buffers — not the whole worktree.
+
+`vfs/gitCheckout` still suppresses `didChange` (including HEAD) during the RPC so the client can refresh once without waiting for the coalescer.
 
 ### `vfs/gitStatus` (read-only)
 
@@ -264,7 +271,11 @@ Switch HEAD to a local branch, remote-tracking branch, or tag.
 }
 ```
 
-Dirty worktree / conflicts surface as RPC `-32603` with git’s message. Clients should refresh tree + `gitStatus` / `gitRefs` after success.
+Dirty worktree / conflicts surface as RPC `-32603` with git’s message.
+
+`git switch` rewrites many files. helm-vfs **suppresses `vfs/didChange` during checkout** (plus a short drain window) so the client does not receive one notification per file. After success, refresh **once**: `vfs/initialize` for the tree, then re-read already-open buffers (`reloadCachedBuffers`), then `gitStatus` / `gitRefs`. Do not pull the whole worktree.
+
+A Terminal `git switch` (not the RPC) is not quieted; the watcher coalesces the storm into one `sync` notification. Same client refresh: initialize + open buffers only.
 
 ### `vfs/shutdown`
 

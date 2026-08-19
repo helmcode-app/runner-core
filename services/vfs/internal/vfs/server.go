@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Server is the stdin/stdout JSON-RPC VFS engine.
@@ -97,6 +98,26 @@ func (s *Server) startWatcherLocked() error {
 	}
 	s.watcher = w
 	return nil
+}
+
+// suppressDidChange mutes fsnotify notifications around a bulk worktree rewrite
+// (git checkout). Events that arrive after the RPC returns are still dropped
+// for a short drain window so the client can refresh the tree once.
+func (s *Server) suppressDidChange(fn func() error) error {
+	s.mu.Lock()
+	w := s.watcher
+	s.mu.Unlock()
+	if w == nil {
+		return fn()
+	}
+	w.SetQuiet(true)
+	defer func() {
+		go func() {
+			time.Sleep(quietDrain)
+			w.SetQuiet(false)
+		}()
+	}()
+	return fn()
 }
 
 func (s *Server) dispatch(req Request) {

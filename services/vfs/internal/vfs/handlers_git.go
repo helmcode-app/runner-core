@@ -84,7 +84,12 @@ func (s *Server) handleGitCheckout(params json.RawMessage) (any, error) {
 	if strings.TrimSpace(p.Kind) == "" {
 		return nil, rpcErr(CodeInvalidParams, "kind is required")
 	}
-	res, err := collectGitCheckout(s.root, p.Ref, p.Kind)
+	var res GitCheckoutResult
+	err := s.suppressDidChange(func() error {
+		var inner error
+		res, inner = collectGitCheckout(s.root, p.Ref, p.Kind)
+		return inner
+	})
 	if err != nil {
 		return nil, rpcErr(CodeInternalError, err.Error())
 	}

@@ -20,7 +20,8 @@ services/vfs/
     ├── server.go           # handler registry + dispatch
     ├── handlers.go         # initialize / read / write / shutdown
     ├── tree.go             # WalkDir scan
-    ├── watcher.go          # fsnotify → didChange
+    ├── watcher.go          # fsnotify → coalesced didChange
+    ├── coalescer.go        # idle-window / bulk `sync`
     ├── paths.go            # safe relative paths
     ├── ignore.go           # ignored names
     ├── write.go            # atomic write

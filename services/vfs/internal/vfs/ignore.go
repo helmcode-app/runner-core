@@ -29,3 +29,10 @@ func pathHasIgnoredSegment(relSlash string) bool {
 	}
 	return false
 }
+
+const gitHeadRel = ".git/HEAD"
+
+// isGitHeadRel is the one `.git` path we still notify (Terminal branch switches).
+func isGitHeadRel(relSlash string) bool {
+	return relSlash == gitHeadRel
+}

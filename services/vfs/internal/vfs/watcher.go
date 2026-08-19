@@ -18,6 +18,10 @@ type Watcher struct {
 	log     *log.Logger
 	mu      sync.Mutex
 	closed  bool
+	// quiet drops didChange emissions (git checkout / bulk writes) while still
+	// attaching watches for new directories.
+	quiet bool
+	coal  coalescer
 }
 
 func NewWatcher(root string, onEvent func(DidChangeParams), logger *log.Logger) (*Watcher, error) {
@@ -35,21 +39,25 @@ func NewWatcher(root string, onEvent func(DidChangeParams), logger *log.Logger) 
 		onEvent: onEvent,
 		log:     logger,
 	}
+	tw.coal = newCoalescer(tw.dispatch)
 	if err := tw.addTree(rootAbs); err != nil {
 		_ = w.Close()
 		return nil, err
 	}
+	tw.addGitDirWatch()
 	go tw.loop()
 	return tw, nil
 }
 
 func (tw *Watcher) Close() error {
 	tw.mu.Lock()
-	defer tw.mu.Unlock()
 	if tw.closed {
+		tw.mu.Unlock()
 		return nil
 	}
 	tw.closed = true
+	tw.mu.Unlock()
+	tw.coal.discard()
 	return tw.w.Close()
 }
 
@@ -71,6 +79,18 @@ func (tw *Watcher) addTree(dir string) error {
 	})
 }
 
+// Watch `.git` itself (not objects/) so Terminal `git switch` still notifies via HEAD.
+func (tw *Watcher) addGitDirWatch() {
+	gitDir := filepath.Join(tw.root, ".git")
+	st, err := os.Stat(gitDir)
+	if err != nil || !st.IsDir() {
+		return
+	}
+	if err := tw.w.Add(gitDir); err != nil {
+		tw.log.Printf("watch add %s: %v", gitDir, err)
+	}
+}
+
 func (tw *Watcher) loop() {
 	for {
 		select {
@@ -89,9 +109,7 @@ func (tw *Watcher) loop() {
 }
 
 func (tw *Watcher) handle(ev fsnotify.Event) {
-	// Ignore chmod-only noise.
-	if ev.Has(fsnotify.Chmod) && !ev.Has(fsnotify.Write) && !ev.Has(fsnotify.Create) &&
-		!ev.Has(fsnotify.Remove) && !ev.Has(fsnotify.Rename) {
+	if isChmodOnly(ev) {
 		return
 	}
 
@@ -100,6 +118,14 @@ func (tw *Watcher) handle(ev fsnotify.Event) {
 		return
 	}
 	rel = filepath.ToSlash(rel)
+
+	// `.git` is ignored in the file tree, but Terminal `git switch` only
+	// updates HEAD when the worktree is unchanged. Surface that one file.
+	if isGitHeadRel(rel) {
+		tw.emit(DidChangeParams{Path: gitHeadRel, Type: ChangeWrite})
+		return
+	}
+
 	if pathHasIgnoredSegment(rel) {
 		return
 	}
@@ -115,9 +141,49 @@ func (tw *Watcher) handle(ev fsnotify.Event) {
 		}
 	}
 
-	if tw.onEvent != nil {
-		tw.log.Printf("didChange type=%s path=%s", ctype, rel)
-		tw.onEvent(DidChangeParams{Path: rel, Type: ctype})
+	tw.emit(DidChangeParams{Path: rel, Type: ctype})
+}
+
+func (tw *Watcher) emit(params DidChangeParams) {
+	if !tw.live() {
+		return
+	}
+	tw.coal.push(params)
+}
+
+func (tw *Watcher) dispatch(params DidChangeParams) {
+	onEvent, ok := tw.listener()
+	if !ok {
+		return
+	}
+	tw.log.Printf("didChange type=%s path=%s", params.Type, params.Path)
+	onEvent(params)
+}
+
+func (tw *Watcher) live() bool {
+	_, ok := tw.listener()
+	return ok
+}
+
+func (tw *Watcher) listener() (func(DidChangeParams), bool) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	if tw.quiet || tw.closed || tw.onEvent == nil {
+		return nil, false
+	}
+	return tw.onEvent, true
+}
+
+// SetQuiet suppresses vfs/didChange while git checkout (or similar) rewrites the tree.
+func (tw *Watcher) SetQuiet(quiet bool) {
+	if tw == nil {
+		return
+	}
+	tw.mu.Lock()
+	tw.quiet = quiet
+	tw.mu.Unlock()
+	if quiet {
+		tw.coal.discard()
 	}
 }
 
@@ -134,4 +200,9 @@ func changeTypeFromEvent(ev fsnotify.Event) (ChangeType, bool) {
 	default:
 		return "", false
 	}
+}
+
+func isChmodOnly(ev fsnotify.Event) bool {
+	return ev.Has(fsnotify.Chmod) && !ev.Has(fsnotify.Write) && !ev.Has(fsnotify.Create) &&
+		!ev.Has(fsnotify.Remove) && !ev.Has(fsnotify.Rename)
 }

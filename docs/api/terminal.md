@@ -8,11 +8,11 @@ iPad / xterm.js  ==WSS==>  open-core /v1/terminal  ==PTY==>  bash/sh (runner pro
 ```
 
 | Item | Value |
-|------|-------|
+| ------ | ------- |
 | Node (production) | `services/runner/src/terminal/` (wired in open-core) |
 | Go (optional sidecar) | `services/webssh/` (same local-PTY model) |
 | iPad client | HelmCode app `Features/Editor/Terminal/` (xterm.js in WKWebView) |
-| Auth | Same Bearer as open-core (`OPENCORE_API_TOKEN`); query `?token=` also accepted on Upgrade |
+| Auth | Device Bearer, or a single-use `?ticket=` from `POST /v1/setup/ws-tickets`. `?token=` is not accepted. |
 
 ---
 
@@ -26,18 +26,18 @@ iPad / xterm.js  ==WSS==>  open-core /v1/terminal  ==PTY==>  bash/sh (runner pro
 Query parameters (on the WebSocket URL):
 
 | Param | Default | Description |
-|-------|---------|-------------|
+| ------- | --------- | ------------- |
 | `cols` | `80` | Initial columns |
 | `rows` | `24` | Initial rows |
 | `workspaceId` | `default` | Workspace cwd (see [workspaces.md](./workspaces.md)) |
-| `token` | — | Optional Bearer when `Authorization` cannot be set on Upgrade |
+| `ticket` | — | Single-use upgrade ticket when `Authorization` cannot be set |
 
 ---
 
 ## Framing
 
 | Direction | Frame | Payload |
-|-----------|-------|---------|
+| ----------- | ------- | --------- |
 | Client → server | **binary** | Raw PTY stdin bytes |
 | Server → client | **binary** | Raw PTY stdout/stderr (TTY merged) |
 | Client → server | **text JSON** | Control messages |
@@ -93,7 +93,7 @@ Optional (prefer binary for input):
 ## Environment
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `TERMINAL_ENABLED` | `false` | Enable gateway in open-core |
 | `TERMINAL_SHELL` | `/bin/bash` | Shell (login `-l` added for bash/zsh when bare path) |
 | `TERMINAL_WORKDIR` | `MAIN_REPO_PATH` | Shell cwd |
@@ -105,7 +105,7 @@ Optional (prefer binary for input):
 Interactive shells get:
 
 | Variable | Value | Purpose |
-|----------|--------|---------|
+| ---------- | -------- | --------- |
 | `TERM` | `xterm-256color` | 256-color capable terminal |
 | `COLORTERM` | `truecolor` | 24-bit color for modern CLIs |
 | `CLICOLOR` / `CLICOLOR_FORCE` | `1` | BSD / macOS `ls` color |
@@ -118,7 +118,7 @@ GNU `ls` is aliased to `ls --color=auto` via the WebSSH interactive rc (see belo
 WebSSH sessions load a small Helm rc (`shell-init.ts` → temp `helm-terminal.rc`):
 
 | Alias | Expansion |
-|-------|-----------|
+| ------- | ----------- |
 | `ls` | `ls --color=auto` (or BSD `ls -G`) |
 | `ll` / `la` / `l` | long / almost-all / classify listings |
 | `grep` / `egrep` / `fgrep` | `--color=auto` when supported |
@@ -139,7 +139,7 @@ No `docker.sock` mount. Works the same on macOS+Podman, bare metal, and Fly.io M
 ### Security notes
 
 - Shell runs as the **runner OS user** with that process's filesystem and network.
-- Prefer `OPENCORE_API_TOKEN` on any non-local bind.
+- Pairing Bearer is required on HTTP and WebSocket upgrades.
 - Cap sessions with `TERMINAL_MAX_SESSIONS`; rely on container cgroup limits for CPU/RAM.
 
 ---

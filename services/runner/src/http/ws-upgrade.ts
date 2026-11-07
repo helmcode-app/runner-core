@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import type { WebSocketServer } from "ws";
-import { authorizeWebSocketUpgrade } from "./auth.js";
+
 
 /** Parse request URL for HTTP Upgrade handlers. */
 export function parseUpgradeUrl(req: IncomingMessage): URL {
@@ -19,7 +19,10 @@ export function rejectUpgradeUnauthorized(socket: Duplex): void {
   socket.destroy();
 }
 
-export type PathMatcher = string | readonly string[] | ((pathname: string) => boolean);
+export type PathMatcher =
+  | string
+  | readonly string[]
+  | ((pathname: string) => boolean);
 
 function pathMatches(pathname: string, matcher: PathMatcher): boolean {
   if (typeof matcher === "function") return matcher(pathname);
@@ -31,10 +34,8 @@ export interface AttachUpgradeOptions {
   /** Path(s) or predicate; non-matching upgrades are ignored (other handlers may claim them). */
   path: PathMatcher;
   wss: WebSocketServer;
-  /** OPENCORE_API_TOKEN or undefined (dev open). */
-  apiToken: string | undefined;
-  /** Accept `?token=` (default true — same as terminal browser clients). */
-  allowQueryToken?: boolean;
+  /** Device Bearer or a single-use `?ticket=`. Long-lived `?token=` is not accepted. */
+  authorize: (req: IncomingMessage, url: URL) => boolean;
   /**
    * After successful upgrade, emitted as `wss.emit("connection", ws, req, url)`.
    * Handlers may ignore the third argument.
@@ -49,8 +50,6 @@ export function attachAuthenticatedUpgrade(
   server: Server,
   opts: AttachUpgradeOptions,
 ): (req: IncomingMessage, socket: Duplex, head: Buffer) => void {
-  const allowQuery = opts.allowQueryToken !== false;
-
   const onUpgrade = (
     req: IncomingMessage,
     socket: Duplex,
@@ -59,7 +58,7 @@ export function attachAuthenticatedUpgrade(
     const url = parseUpgradeUrl(req);
     if (!pathMatches(url.pathname, opts.path)) return;
 
-    if (!authorizeWebSocketUpgrade(req, opts.apiToken, url, { allowQueryToken: allowQuery })) {
+    if (!opts.authorize(req, url)) {
       rejectUpgradeUnauthorized(socket);
       return;
     }

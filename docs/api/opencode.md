@@ -51,7 +51,7 @@ Needs **outbound network** to npm on first install. Persist `/app/.opencode` wit
 ## Auth
 
 - **LLM keys:** `AGENT_PROVIDER` + `AGENT_API_KEY` → OpenCode `auth.json`
-- **Runner ingress:** `OPENCORE_API_TOKEN` Bearer (unrelated to OpenCode)
+- **Runner ingress:** device Bearer (unrelated to OpenCode)
 
 | `AGENT_PROVIDER` | auth.json id | model prefix |
 |------------------|--------------|--------------|

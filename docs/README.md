@@ -5,8 +5,9 @@ API contracts for the HelmCode open-core daemon.
 Default agent path: **`/v1/sessions/*` → ACP Client → OpenCode ACP Server** (`opencode acp`).
 
 | Document | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | [Open-core HTTP API](./api/open-core.md) | Standalone server on `:8080` (`HELM_MODE=open-core`) |
+| [Runner setup](./api/setup.md) | Pairing QR + GitHub device flow + clone |
 | [Workspaces](./api/workspaces.md) | Shared `workspaceId` for sessions / VFS / terminal |
 | [Agent sessions](./api/sessions.md) | Product `/v1/sessions/*` |
 | [ACP harnesses](./api/harnesses.md) | `AGENT_HARNESS` catalog (OpenCode + Claude / Codex / Cursor / Grok) |

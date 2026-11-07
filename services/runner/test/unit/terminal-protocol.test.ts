@@ -53,25 +53,19 @@ describe("terminal protocol", () => {
 });
 
 describe("authorizeTerminalUpgrade", () => {
-  it("allows when token unset", () => {
-    const req = { headers: {} } as IncomingMessage;
-    const url = new URL("http://localhost/v1/terminal");
-    assert.equal(authorizeTerminalUpgrade(req, url, undefined), true);
-  });
-
-  it("accepts Bearer header", () => {
+  it("delegates to the device authorizer", () => {
     const req = {
       headers: { authorization: "Bearer secret" },
     } as IncomingMessage;
-    const url = new URL("http://localhost/v1/terminal");
-    assert.equal(authorizeTerminalUpgrade(req, url, "secret"), true);
-    assert.equal(authorizeTerminalUpgrade(req, url, "other"), false);
-  });
-
-  it("accepts query token fallback", () => {
-    const req = { headers: {} } as IncomingMessage;
     const url = new URL("http://localhost/v1/terminal?token=secret");
-    assert.equal(authorizeTerminalUpgrade(req, url, "secret"), true);
+    assert.equal(
+      authorizeTerminalUpgrade(req, url, (got) => got === req),
+      true,
+    );
+    assert.equal(
+      authorizeTerminalUpgrade(req, url, () => false),
+      false,
+    );
   });
 });
 

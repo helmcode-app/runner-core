@@ -1,10 +1,7 @@
 import type { IncomingMessage, Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AppConfig } from "../config.js";
-import {
-  attachAuthenticatedUpgrade,
-  closeWebSockets,
-} from "../http/index.js";
+import { attachAuthenticatedUpgrade, closeWebSockets } from "../http/index.js";
 import type { Logger } from "../logger.js";
 import {
   DEFAULT_WORKSPACE_ID,
@@ -35,9 +32,9 @@ export function attachVfsWebSocket(
   pool: VfsBridgePool,
   config: AppConfig,
   logger: Logger,
+  authorize: (req: IncomingMessage, url: URL) => boolean,
 ): { close(): Promise<void> } {
   const log = logger.child({ component: "vfs-ws" });
-  const apiToken = config.OPENCORE_API_TOKEN?.trim() || undefined;
   const wss = new WebSocketServer({ noServer: true });
   const sockets = new Map<WebSocket, { workspaceId: string }>();
 
@@ -78,7 +75,7 @@ export function attachVfsWebSocket(
   const onUpgrade = attachAuthenticatedUpgrade(server, {
     path: VFS_WS_PATH,
     wss,
-    apiToken,
+    authorize,
   });
 
   wss.on("connection", (ws: WebSocket, _req: IncomingMessage, url: URL) => {
@@ -185,9 +182,12 @@ export async function createVfsGateway(
   config: AppConfig,
   logger: Logger,
   workspaces: WorkspaceRegistry,
+  authorize: (req: IncomingMessage, url: URL) => boolean,
 ): Promise<VfsGateway> {
   if (!config.VFS_ENABLED) {
-    logger.child({ component: "vfs-gateway" }).info("VFS disabled (VFS_ENABLED=false)");
+    logger
+      .child({ component: "vfs-gateway" })
+      .info("VFS disabled (VFS_ENABLED=false)");
     return {
       bridge: null,
       pool: null,
@@ -200,9 +200,11 @@ export async function createVfsGateway(
   try {
     await pool.ensure(DEFAULT_WORKSPACE_ID);
   } catch (err) {
-    logger.child({ component: "vfs-gateway" }).error("failed to start helm-vfs", {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    logger
+      .child({ component: "vfs-gateway" })
+      .error("failed to start helm-vfs", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     return {
       bridge: null,
       pool: null,
@@ -211,7 +213,7 @@ export async function createVfsGateway(
     };
   }
 
-  const ws = attachVfsWebSocket(server, pool, config, logger);
+  const ws = attachVfsWebSocket(server, pool, config, logger, authorize);
   return {
     get bridge() {
       return pool.get(DEFAULT_WORKSPACE_ID);

@@ -82,7 +82,12 @@ export {
   clearModelsCatalogCache,
   loadAgentModelsCatalog,
 } from "./models.js";
-export { mapAcpSessionUpdate, mapStopReason, parseSessionUsage, usageFromPromptResult } from "./map-updates.js";
+export {
+  mapAcpSessionUpdate,
+  mapStopReason,
+  parseSessionUsage,
+  usageFromPromptResult,
+} from "./map-updates.js";
 export {
   fastSetConfig,
   modelIdsFromConfigOptions,
@@ -103,6 +108,14 @@ export {
   type RewindRestore,
   type SessionCheckpoint,
 } from "./rewind.js";
+export {
+  SessionStore,
+  defaultSessionsDir,
+  fromPersistedSession,
+  parsePersistedSession,
+  toPersistedSession,
+  type PersistedSession,
+} from "./persist.js";
 
 export interface AgentRuntime {
   gateway: AgentGateway;
@@ -149,8 +162,10 @@ export function createAgentRuntime(
     harness,
     async start() {
       await harness.start();
+      await gateway.restore();
     },
     async stop() {
+      await gateway.flush();
       await harness.stop();
     },
   };

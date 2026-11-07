@@ -2,10 +2,7 @@ import { accessSync, constants as fsConstants } from "node:fs";
 import type { IncomingMessage, Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AppConfig } from "../config.js";
-import {
-  attachAuthenticatedUpgrade,
-  authorizeWebSocketUpgrade,
-} from "../http/index.js";
+import { attachAuthenticatedUpgrade } from "../http/index.js";
 import type { Logger } from "../logger.js";
 import { clampInt } from "../util/env.js";
 import {
@@ -36,13 +33,14 @@ export interface TerminalGateway {
  * No Docker socket. Shell runs in the runner process namespace with
  * cwd from `?workspaceId=` (default workspace) or TERMINAL_WORKDIR overlay.
  *
- * Upgrade auth: Bearer + optional `?token=` (same OPENCORE_API_TOKEN).
+ * Upgrade auth: device Bearer, or a single-use `?ticket=`.
  */
 export function createTerminalGateway(
   server: Server,
   config: AppConfig,
   logger: Logger,
   workspaces: WorkspaceRegistry,
+  authorize: (req: IncomingMessage, url: URL) => boolean,
 ): TerminalGateway {
   const log = logger.child({ component: "terminal-ws" });
   const enabled = config.TERMINAL_ENABLED;
@@ -56,7 +54,6 @@ export function createTerminalGateway(
     };
   }
 
-  const apiToken = config.OPENCORE_API_TOKEN?.trim() || undefined;
   const wss = new WebSocketServer({ noServer: true });
   const sessions = new Set<TerminalSession>();
   const maxSessions = config.TERMINAL_MAX_SESSIONS;
@@ -67,16 +64,12 @@ export function createTerminalGateway(
   const onUpgrade = attachAuthenticatedUpgrade(server, {
     path: TERMINAL_PATHS,
     wss,
-    apiToken,
-    allowQueryToken: true,
+    authorize,
   });
 
-  wss.on(
-    "connection",
-    (ws: WebSocket, _req: IncomingMessage, url: URL) => {
-      openSession(ws, url);
-    },
-  );
+  wss.on("connection", (ws: WebSocket, _req: IncomingMessage, url: URL) => {
+    openSession(ws, url);
+  });
 
   function openSession(ws: WebSocket, url: URL): void {
     const cols = clampInt(url.searchParams.get("cols"), 80, 1, 500);
@@ -97,7 +90,10 @@ export function createTerminalGateway(
           : err instanceof Error
             ? err.message
             : String(err);
-      log.warn("terminal session rejected", { reason: "workspace", workspaceId });
+      log.warn("terminal session rejected", {
+        reason: "workspace",
+        workspaceId,
+      });
       if (ws.readyState === ws.OPEN) {
         try {
           ws.send(encodeServerMessage({ type: "error", message }));
@@ -111,7 +107,10 @@ export function createTerminalGateway(
 
     if (sessions.size >= maxSessions) {
       const message = `Terminal session limit reached (${maxSessions}). Close another session and retry.`;
-      log.warn("terminal session rejected", { reason: "max_sessions", maxSessions });
+      log.warn("terminal session rejected", {
+        reason: "max_sessions",
+        maxSessions,
+      });
       if (ws.readyState === ws.OPEN) {
         try {
           ws.send(encodeServerMessage({ type: "error", message }));
@@ -197,16 +196,14 @@ export function createTerminalGateway(
 
 /**
  * Auth for HTTP Upgrade (exported for unit tests).
- * Prefer {@link authorizeWebSocketUpgrade} for new code.
+ * Production passes {@link SetupController.authorizeUpgrade}.
  */
 export function authorizeTerminalUpgrade(
   req: IncomingMessage,
   url: URL,
-  expectedToken: string | undefined,
+  authorize: (req: IncomingMessage, url: URL) => boolean,
 ): boolean {
-  return authorizeWebSocketUpgrade(req, expectedToken, url, {
-    allowQueryToken: true,
-  });
+  return authorize(req, url);
 }
 
 function resolveWorkdir(preferred: string): string {

@@ -30,7 +30,11 @@ if [ "$(id -u)" = "0" ]; then
   chown -R helm:helm "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" || true
 fi
 
-if ! repo_ready; then
+# compose.dev leaves MAIN_REPO empty so the setup page can clone from GitHub.
+# `docker compose up smoke` sets SEED_GIT_FIXTURE=true for a local fixture.
+SEED_GIT_FIXTURE="${SEED_GIT_FIXTURE:-false}"
+
+if ! repo_ready && [ "$SEED_GIT_FIXTURE" = "true" ]; then
   echo "[smoke-init] seeding local git fixture at $MAIN_REPO_PATH"
   clear_dir "$BARE_PATH"
   clear_dir "$MAIN_REPO_PATH"
@@ -41,8 +45,8 @@ if ! repo_ready; then
 
   cd "$MAIN_REPO_PATH"
   git checkout -b main
-  printf '# smoke fixture\n' > README.md
-  printf 'hello\n' > hello.txt
+  printf '# smoke fixture\n' >README.md
+  printf 'hello\n' >hello.txt
   git add -A
   git -c user.email=agent@helmcode.app -c user.name="HelmCode Agent" \
     commit -m "initial"
@@ -54,8 +58,10 @@ if ! repo_ready; then
     chown -R helm:helm "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" || true
   fi
   echo "[smoke-init] fixture ready (branch main → origin)"
-else
+elif repo_ready; then
   echo "[smoke-init] using existing repo at $MAIN_REPO_PATH"
+else
+  echo "[smoke-init] empty MAIN_REPO (no fixture); setup page will clone"
 fi
 
 export HELM_MODE="${HELM_MODE:-open-core}"

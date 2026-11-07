@@ -3,8 +3,7 @@
 #   docker compose run --rm test
 #   docker compose up smoke
 #
-# Host repo for iPad / VFS (see compose.dev.yaml):
-#   export HOST_REPO=/absolute/path/to/git/repo
+# Dev (HOST_REPO optional — omit to clone via the setup page):
 #   docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 
 services:
@@ -49,6 +48,7 @@ services:
       PORT: "8080"
       LOG_LEVEL: info
       VFS_ENABLED: "true"
+      SEED_GIT_FIXTURE: "true"
     volumes:
       - smoke-main:/app/main_repo
       - smoke-ws:/app/workspaces

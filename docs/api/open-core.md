@@ -3,11 +3,11 @@
 Standalone HTTP + WebSocket API for local / iPad clients.
 
 | Item | Value |
-|------|-------|
+| ------ | ------- |
 | Mode | `HELM_MODE=open-core` (only supported mode) |
 | Default bind | `0.0.0.0:8080` (`HOST` / `PORT`) |
 | Content type | `application/json; charset=utf-8` |
-| Auth | Optional Bearer (`OPENCORE_API_TOKEN`). When set, all routes **except** `GET /health` require `Authorization: Bearer <token>`. When unset, API is open (dev only). |
+| Auth | Per-device Bearer from setup enroll. All routes **except** `GET /health` and the public setup/enroll routes require `Authorization: Bearer`. |
 | Implementation | `services/runner/src/modes/open-core/` |
 
 Agent product API: [sessions.md](./sessions.md). VFS: [vfs.md](./vfs.md). Terminal: [terminal.md](./terminal.md).
@@ -17,8 +17,10 @@ Agent product API: [sessions.md](./sessions.md). VFS: [vfs.md](./vfs.md). Termin
 ## HTTP
 
 | Method | Path | Auth | Description |
-|--------|------|------|-------------|
+| -------- | ------ | ------ | ------------- |
+| `GET` | `/` | no | Setup page (pairing + GitHub + clone) |
 | `GET` | `/health` | no | Process liveness |
+| `*` | `/v1/setup*` | mixed | First-boot setup (see [setup.md](./setup.md)) |
 | `GET` | `/v1/status` | yes* | Runtime status |
 | `*` | `/v1/workspaces*` | yes* | Workspace catalog (see [workspaces.md](./workspaces.md)) |
 | `*` | `/v1/sessions/*` | yes* | Agent sessions (see [sessions.md](./sessions.md)) |
@@ -31,7 +33,7 @@ Agent product API: [sessions.md](./sessions.md). VFS: [vfs.md](./vfs.md). Termin
 | `/v1/vfs` | yes* | VFS JSON-RPC |
 | `/v1/terminal` | yes* | WebSSH (in-process PTY). Alias: `/api/v1/terminal/ws` |
 
-\* Required only when `OPENCORE_API_TOKEN` is configured.
+\* Required once a device token exists. A runner with no devices still rejects these routes.
 
 ---
 

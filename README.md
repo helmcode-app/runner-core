@@ -28,7 +28,7 @@ runner-core/
 
 ```
 iPad / client
-    │  HTTP + WebSocket  (Bearer OPENCORE_API_TOKEN)
+    │  HTTP + WebSocket  (per-device Bearer)
     ▼
 services/runner (Node)
     ├── modes/open-core/   routes + server
@@ -61,7 +61,7 @@ Copy [`.env.example`](./.env.example) to `.env` and fill what you need. Empty op
 ## Docker packaging
 
 | Target | Purpose |
-|--------|---------|
+| -------- | --------- |
 | `test` | Typecheck + full Node suite |
 | `runtime` | Production daemon |
 | `smoke` | Runtime + in-container git fixture |
@@ -72,7 +72,8 @@ docker compose run --rm --build test
 docker compose up --build smoke
 # → http://127.0.0.1:18080
 
-export HOST_REPO=/absolute/path/to/your/git/repo
+# Optional: bind a local git checkout. Omit to pair + clone from the setup page.
+# export HOST_REPO=/absolute/path/to/your/git/repo
 docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 ```
 
@@ -89,7 +90,7 @@ download. Install knobs live in `agent/harnesses/catalog.ts` + overlays, not env
 
 ```
 iPad / curl
-    │  Authorization: Bearer <OPENCORE_API_TOKEN>   (optional if token empty)
+    │  Authorization: Bearer <pairing token>
     ▼
 runner  /v1/sessions/*  |  /v1/vfs  |  /v1/terminal
     │  ACP (stdio ndjson)
@@ -101,8 +102,7 @@ LLM
 ```
 
 | Variable | Purpose |
-|----------|---------|
-| `OPENCORE_API_TOKEN` | Client → runner Bearer |
+| ---------- | --------- |
 | `SESSIONS_ENABLED` | Expose `/v1/sessions/*` and boot the harness ACP Server |
 | `AGENT_HARNESS` | ACP Server: `opencode` (default), `claude`, `codex`, `cursor`, `grok` |
 | `AGENT_PROVIDER` | LLM vendor **inside** a multi-provider shell (`opencode-go` / `opencode-zen`). Unused for claude/codex/cursor/grok |
@@ -149,7 +149,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/sessions \
 ## API docs
 
 | Document | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | [docs/api/open-core.md](./docs/api/open-core.md) | open-core HTTP + auth |
 | [docs/api/sessions.md](./docs/api/sessions.md) | Agent sessions `/v1/sessions/*` |
 | [docs/api/harnesses.md](./docs/api/harnesses.md) | `AGENT_HARNESS` catalog |
@@ -163,7 +163,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/sessions \
 ## Scripts (root)
 
 | Script | Action |
-|--------|--------|
+| -------- | -------- |
 | `npm run build` | Build runner (TypeScript) |
 | `npm run build:vfs` | Build `helm-vfs` |
 | `npm run build:webssh` | Build `helm-webssh` |

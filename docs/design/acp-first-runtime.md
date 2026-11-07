@@ -8,7 +8,7 @@ Goose is a future optional harness, not a proxy: [acp-and-goose.md](./acp-and-go
 ## Roles
 
 | Layer | Role |
-|-------|------|
+| ------- | ------ |
 | iPad / Commander | REST + SSE `/v1/sessions/*` |
 | Runner | **ACP Client** + product gateway (ids, timeline, permissions) |
 | Harness process | **ACP Server** — default `opencode acp` |
@@ -34,10 +34,11 @@ iPad ── /v1/sessions/* ──► Agent Gateway (ACP Client)
 ## Modules (`services/runner/src/agent/`)
 
 | Path | Role |
-|------|------|
+| ------ | ------ |
 | `gateway.ts` | Helm session registry, timeline, SSE, prompt 202, rewind |
 | `checkpoint.ts` | git write-tree snapshot / read-tree restore |
 | `rewind.ts` | Timeline truncate + seed-context planning |
+| `persist.ts` | Durable Helm sessions (`$WORKSPACES_PATH/.sessions`) |
 | `acp/connection.ts` | ACP initialize + permission + `session/update` |
 | `map-updates.ts` | ACP updates → Helm timeline / SSE |
 | `settings.ts` | Product overlays (permission, extra models, cwd) |
@@ -68,7 +69,7 @@ AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 ```
 
 | Env | Meaning |
-|-----|---------|
+| ----- | --------- |
 | `AGENT_HARNESS` | Which ACP Server process to spawn |
 | `AGENT_PROVIDER` | LLM vendor **inside** OpenCode (later pi / goose). Unused for single-vendor harnesses |
 | `AGENT_API_KEY` | Key for that harness |
@@ -89,7 +90,8 @@ Events   GET  …/events         → Gateway SSE from session/update
 Cancel   POST …/cancel         → acp.session/cancel (notification)
 Rewind   POST …/rewind         → Gateway checkpoint (not ACP)
 History  GET  …/history        → Gateway timeline (product reconnect)
-Delete   DELETE …              → acp.session/close
+Restart  load JSON             → same Helm ids; ACP rebuilt on next prompt
+Delete   DELETE …              → acp.session/close + unlink JSON
 ```
 
 iPad stays on REST + SSE. Runner is the ACP Client; do not expose JSON-RPC
@@ -102,7 +104,7 @@ truncate timeline + restore files + replace the ACP session.
 ## Decisions
 
 | Topic | Choice |
-|-------|--------|
+| ------- | -------- |
 | Agent abstraction | ACP (Runner = Client, harness = Server) |
 | Default harness | **OpenCode ACP** (`opencode acp`) |
 | Multi-harness bus | Direct ACP per harness — not Goose-in-the-middle |

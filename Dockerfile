@@ -6,7 +6,7 @@
 #
 # Targets: test | build | runtime | smoke
 
-FROM node:22-bookworm-slim AS base
+FROM node:26-bookworm-slim AS base
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
     HELM_MODE=open-core \
@@ -31,12 +31,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ---------------------------------------------------------------------------
 # test — Node suite (+ optional helm-vfs binary for VFS bridge tests)
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim AS test
+FROM node:26-bookworm-slim AS test
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=test
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       git \
+      python3 \
+      build-essential \
       golang-go \
     && rm -rf /var/lib/apt/lists/* \
     && git config --system --add safe.directory '*' \
@@ -77,7 +79,7 @@ RUN npm run build -w @helmcode/runner \
 # ---------------------------------------------------------------------------
 # go-build (helm-vfs)
 # ---------------------------------------------------------------------------
-FROM golang:1.22-bookworm AS go-build
+FROM golang:1.26-alpine AS go-build
 WORKDIR /src
 COPY services/vfs/go.mod services/vfs/go.sum ./
 RUN go mod download

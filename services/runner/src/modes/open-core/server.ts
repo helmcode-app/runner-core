@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import {
   createAgentRuntime,
   type AgentGateway,
@@ -12,11 +12,9 @@ import {
   createTerminalGateway,
   type TerminalGateway,
 } from "../../terminal/index.js";
-import {
-  createVfsGateway,
-  type VfsGateway,
-} from "../../vfs/index.js";
+import { createVfsGateway, type VfsGateway } from "../../vfs/index.js";
 import { createWorkspaceRegistry } from "../../workspaces/index.js";
+import { SetupController } from "../../setup/index.js";
 import { handleOpenCoreRequest } from "./routes.js";
 
 export interface OpenCoreServer {
@@ -54,17 +52,14 @@ export async function startOpenCore(
 ): Promise<OpenCoreServer> {
   const log = logger.child({ component: "open-core" });
   const installSignals = opts.installSignalHandlers !== false;
-  const apiToken = config.OPENCORE_API_TOKEN?.trim() || undefined;
+  const workspaces = await createWorkspaceRegistry(config);
+  const setup = await SetupController.create(config, logger, { workspaces });
+  const authorizeUpgrade = (req: IncomingMessage, url: URL) =>
+    setup.authorizeUpgrade(req, url);
 
-  if (!apiToken) {
-    log.warn(
-      "OPENCORE_API_TOKEN unset — open-core HTTP API is unauthenticated (dev only)",
-    );
-  } else {
-    log.info("open-core API auth enabled (Bearer token)");
-  }
-
-  const workspaces = createWorkspaceRegistry(config);
+  log.info("open-core API auth enabled (device tokens)", {
+    setupPhase: setup.operatorStatus().phase,
+  });
 
   const agentRuntime = createAgentRuntime(config, logger, {
     workspaces,
@@ -98,10 +93,10 @@ export async function startOpenCore(
     try {
       await handleOpenCoreRequest(req, res, {
         config,
-        apiToken,
         getBridge: (workspaceId) => vfs.getBridge(workspaceId),
         workspaces,
         agentGateway,
+        setup,
         logger,
       });
     } catch (err) {
@@ -114,8 +109,20 @@ export async function startOpenCore(
     }
   });
 
-  vfs = await createVfsGateway(server, config, logger, workspaces);
-  const terminal = createTerminalGateway(server, config, logger, workspaces);
+  vfs = await createVfsGateway(
+    server,
+    config,
+    logger,
+    workspaces,
+    authorizeUpgrade,
+  );
+  const terminal = createTerminalGateway(
+    server,
+    config,
+    logger,
+    workspaces,
+    authorizeUpgrade,
+  );
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

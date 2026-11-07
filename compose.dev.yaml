@@ -1,28 +1,25 @@
-# Local dev: open-core + VFS against a **host** git checkout.
+# Local dev: open-core + VFS.
 #
 # Usage:
-#   1. REQUIRED — set a real host git checkout (absolute path):
+#   1. Optional — bind a host git checkout:
 #        export HOST_REPO=/Users/you/Developer/src/github.com/org/my-repo
-#      or put HOST_REPO=... in runner-core/.env
+#      Omit HOST_REPO to use a Docker volume and the setup page (pair + GitHub).
 #   2. Optional secrets / overrides in runner-core/.env (auto-loaded if present):
-#        AGENT_PROVIDER, AGENT_API_KEY, OPENCORE_API_TOKEN, …
+#        AGENT_PROVIDER, AGENT_API_KEY, …
 #   3. Start:
 #        docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 #   4. Probe:
 #        curl -s http://127.0.0.1:18080/health | jq .
-#        curl -s http://127.0.0.1:18080/v1/vfs/status | jq .
+#        open http://127.0.0.1:18080/     (setup / pairing)
 #   5. iPad / Simulator Base URL:
 #        http://127.0.0.1:18080          (Simulator)
 #        http://<Mac-LAN-IP>:18080       (physical iPad)
 #
 # Notes:
-#   - HOST_REPO is required. The placeholder path is not valid and will fail mount.
-#   - HOST_REPO must be a git repo (contains .git).
+#   - HOST_REPO is optional. Unset → named volume `dev-main-repo`.
+#   - If HOST_REPO is set, it must be an absolute path to a git repo.
 #   - One runner instance = one repo (MAIN_REPO_PATH=/app/main_repo).
-#   - Agent worktrees use a separate volume (/app/workspaces), not the host mount.
-#   - Compose only pins container-layout + a few dev defaults. Everything else
-#     comes from the image/config.ts defaults or from .env (see env_file).
-#   - Agent sessions: SESSIONS_ENABLED=true in .env (harness installs from code defaults).
+#   - Agent worktrees use /app/workspaces (separate volume).
 #   - Stop: docker compose -f compose.yaml -f compose.dev.yaml down
 
 services:
@@ -55,16 +52,13 @@ services:
       # catalog defaults + overlays, not env.
       SESSIONS_ENABLED: ${SESSIONS_ENABLED:-true}
       AGENT_HARNESS: ${AGENT_HARNESS:-opencode}
+      # Empty MAIN_REPO unless HOST_REPO is set (setup page clones).
+      SEED_GIT_FIXTURE: ${SEED_GIT_FIXTURE:-false}
     volumes:
-      # ------------------------------------------------------------------
-      # Repo entrypoint: host path → container MAIN_REPO_PATH
-      # Must be a real absolute path (export HOST_REPO or runner-core/.env).
-      # ------------------------------------------------------------------
-      # NOTE: Compose default syntax is ${VAR:-default} (colon + dash). A bare
-      # ${VAR:/path} expands wrong and becomes ":/app/main_repo" → podman-compose
-      # error: "unknown mount option /app/main_repo".
-      - ${HOST_REPO:?Set HOST_REPO to an absolute path of a local git repo}:/app/main_repo
-      # Agent worktrees (do not bind-mount over the host repo)
+      # Repo: bind HOST_REPO if set, else named volume (setup page clones here).
+      # ${VAR:-name} — empty HOST_REPO must not become ":/app/main_repo".
+      - ${HOST_REPO:-dev-main-repo}:/app/main_repo
+      # Agent worktrees + Helm session JSON (`workspaces/.sessions`)
       - dev-workspaces:/app/workspaces
       # Persist managed harness installs across container recreates
       - dev-opencode:/app/.opencode
@@ -84,6 +78,7 @@ services:
       start_period: 120s
 
 volumes:
+  dev-main-repo:
   dev-workspaces:
   dev-opencode:
   dev-helm-harnesses:

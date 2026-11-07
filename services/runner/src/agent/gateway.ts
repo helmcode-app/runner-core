@@ -48,11 +48,13 @@ import {
   type RewindRestore,
   type SessionCheckpoint,
 } from "./rewind.js";
+import { SessionStore, defaultSessionsDir } from "./persist.js";
 import { resolveAgentSettings } from "./settings.js";
 import { type WorkspaceRegistry } from "../workspaces/index.js";
 
 export interface GatewaySessionRecord {
   helmId: string;
+  /** Empty after process restart until the next prompt rebuilds ACP. */
   acpSessionId: string;
   cwd: string;
   workspaceId: string;
@@ -109,14 +111,22 @@ export interface AgentGatewayHealth {
 export class AgentGateway {
   private readonly sessions = new Map<string, GatewaySessionRecord>();
   private readonly byAcpId = new Map<string, string>();
-  private readonly sseListeners = new Set<(event: SessionStreamEvent) => void>();
+  private readonly sseListeners = new Set<
+    (event: SessionStreamEvent) => void
+  >();
   /** Accumulate streaming message text per (session, role) until turn ends. */
   private readonly streamBuffers = new Map<
     string,
-    { id: string; text: string; role: TimelineEntry["role"]; kind: TimelineEntry["kind"] }
+    {
+      id: string;
+      text: string;
+      role: TimelineEntry["role"];
+      kind: TimelineEntry["kind"];
+    }
   >();
   /** Harness-advertised `provider/model` ids from ACP configOptions. */
   private discoveredModels: string[] = [];
+  private readonly store: SessionStore;
 
   constructor(
     private readonly config: AppConfig,
@@ -124,7 +134,39 @@ export class AgentGateway {
     private readonly getConnection: () => AcpConnection,
     private readonly harness?: HarnessRuntime | null,
     private readonly workspaces?: WorkspaceRegistry,
-  ) {}
+  ) {
+    const dir =
+      resolveAgentSettings().sessionsDir?.trim() ||
+      defaultSessionsDir(this.config.WORKSPACES_PATH);
+    this.store = new SessionStore(
+      dir,
+      this.logger.child({ component: "session-store" }),
+    );
+  }
+
+  /** Load durable sessions. ACP ids are rebuilt on the next prompt. */
+  async restore(): Promise<void> {
+    const loaded = await this.store.loadAll();
+    for (const row of loaded) {
+      const seed = row.seedContext?.trim() || formatSeedContext(row.timeline);
+      const record: GatewaySessionRecord = {
+        ...row,
+        acpSessionId: "",
+        ...(seed ? { seedContext: seed } : {}),
+      };
+      this.sessions.set(record.helmId, record);
+    }
+    this.logger.info("restored sessions", {
+      count: loaded.length,
+      dir:
+        resolveAgentSettings().sessionsDir?.trim() ||
+        defaultSessionsDir(this.config.WORKSPACES_PATH),
+    });
+  }
+
+  async flush(): Promise<void> {
+    await this.store.flush();
+  }
 
   /** ACP session/update → timeline + SSE. */
   handleAcpUpdate(params: {
@@ -167,6 +209,7 @@ export class AgentGateway {
     for (const event of mapped.events) {
       this.emit(event);
     }
+    this.persist(record);
   }
 
   subscribe(listener: (event: SessionStreamEvent) => void): () => void {
@@ -253,6 +296,7 @@ export class AgentGateway {
       sessionId: helmId,
       data: { acpSessionId: opened.acpSessionId },
     });
+    this.persist(record);
 
     return this.toAgentSession(record);
   }
@@ -270,9 +314,10 @@ export class AgentGateway {
   async deleteSession(helmId: string): Promise<void> {
     const record = this.require(helmId);
     await this.closeAcpSession(record.acpSessionId);
-    this.byAcpId.delete(record.acpSessionId);
+    if (record.acpSessionId) this.byAcpId.delete(record.acpSessionId);
     this.sessions.delete(helmId);
     this.clearStreamBuffers(helmId);
+    await this.store.remove(helmId);
     this.emit({
       type: "session.deleted",
       at: new Date().toISOString(),
@@ -297,19 +342,22 @@ export class AgentGateway {
       throw new AgentRuntimeError("prompt is required", 400);
     }
 
+    await this.ensureAcpSession(record);
     const conn = this.getConnection();
     await this.applyMode(record, mode);
     await this.applyPromptConfig(record, body);
 
     const now = new Date().toISOString();
     const userId = `user_${randomUUID()}`;
-    const snapshot = await captureWorkspaceCheckpoint(record.cwd).catch((err) => {
-      this.logger.debug("checkpoint capture skipped", {
-        sessionId: helmId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    });
+    const snapshot = await captureWorkspaceCheckpoint(record.cwd).catch(
+      (err) => {
+        this.logger.debug("checkpoint capture skipped", {
+          sessionId: helmId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      },
+    );
     const checkpoint: SessionCheckpoint = {
       messageId: userId,
       capturedAt: now,
@@ -351,6 +399,7 @@ export class AgentGateway {
       sessionId: helmId,
       data: { status: "running" },
     });
+    this.persist(record);
 
     const ac = new AbortController();
     record.promptAbort = ac;
@@ -407,7 +456,10 @@ export class AgentGateway {
           return;
         }
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.warn("acp prompt failed", { sessionId: helmId, error: message });
+        this.logger.warn("acp prompt failed", {
+          sessionId: helmId,
+          error: message,
+        });
         record.timeline.push({
           id: `err_${randomUUID()}`,
           at: new Date().toISOString(),
@@ -436,7 +488,10 @@ export class AgentGateway {
     };
   }
 
-  history(helmId: string, limit?: number): {
+  history(
+    helmId: string,
+    limit?: number,
+  ): {
     sessionId: string;
     session: AgentSession;
     entries: TimelineEntry[];
@@ -458,6 +513,10 @@ export class AgentGateway {
   async cancel(helmId: string): Promise<boolean> {
     const record = this.require(helmId);
     record.promptAbort?.abort();
+    if (!record.acpSessionId) {
+      if (record.status === "running") this.finalizeTurn(record, "cancelled");
+      return true;
+    }
     try {
       await this.getConnection().notify(acp.methods.agent.session.cancel, {
         sessionId: record.acpSessionId,
@@ -483,7 +542,11 @@ export class AgentGateway {
   ): Promise<RewindResponse> {
     const record = this.require(helmId);
     const restore: RewindRestore = parseRewindRestore(input.restore);
-    const plan = planRewind(record.timeline, record.checkpoints, input.messageId);
+    const plan = planRewind(
+      record.timeline,
+      record.checkpoints,
+      input.messageId,
+    );
 
     if (record.status === "running") {
       await this.cancel(helmId);
@@ -509,7 +572,10 @@ export class AgentGateway {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (restore === "code") {
-          throw new AgentRuntimeError(`failed to restore files: ${message}`, 500);
+          throw new AgentRuntimeError(
+            `failed to restore files: ${message}`,
+            500,
+          );
         }
         this.logger.warn("rewind file restore failed", {
           sessionId: helmId,
@@ -560,6 +626,7 @@ export class AgentGateway {
       sessionId: helmId,
       data: { status: record.status },
     });
+    this.persist(record);
 
     return {
       sessionId: helmId,
@@ -587,6 +654,7 @@ export class AgentGateway {
       sessionId: record.helmId,
       data: { status: record.status, turnStatus: status },
     });
+    this.persist(record);
   }
 
   private upsertTimelineStreaming(
@@ -714,7 +782,27 @@ export class AgentGateway {
     };
   }
 
+  private persist(record: GatewaySessionRecord): void {
+    this.store.schedule(record);
+  }
+
+  /** Rebuild ACP after restart / rewind-style seed. */
+  private async ensureAcpSession(record: GatewaySessionRecord): Promise<void> {
+    if (record.acpSessionId) return;
+    const seed =
+      record.seedContext?.trim() || formatSeedContext(record.timeline);
+    if (seed) record.seedContext = seed;
+    const opened = await this.openAcpSession(record.cwd);
+    record.acpSessionId = opened.acpSessionId;
+    record.availableModeIds = opened.availableModeIds;
+    record.configOptions = opened.configOptions;
+    this.rememberDiscoveredModels(opened.configOptions);
+    this.byAcpId.set(opened.acpSessionId, record.helmId);
+    this.persist(record);
+  }
+
   private async closeAcpSession(acpSessionId: string): Promise<void> {
+    if (!acpSessionId) return;
     const conn = this.getConnection();
     try {
       await conn.notify(acp.methods.agent.session.cancel, {
@@ -816,10 +904,7 @@ export class AgentGateway {
     result: { usage?: Record<string, unknown> },
   ): void {
     if (!result.usage) return;
-    const next = usageFromPromptResult(
-      { usage: result.usage },
-      record.usage,
-    );
+    const next = usageFromPromptResult({ usage: result.usage }, record.usage);
     if (!next) return;
     const current = record.usage;
     if (current && current.used > 0) return;
@@ -844,7 +929,9 @@ export class AgentGateway {
     this.discoveredModels = ids;
   }
 
-  private async discoverHarnessModels(forceRefresh: boolean): Promise<string[]> {
+  private async discoverHarnessModels(
+    forceRefresh: boolean,
+  ): Promise<string[]> {
     if (!forceRefresh && this.discoveredModels.length > 0) {
       return this.discoveredModels;
     }
@@ -899,7 +986,7 @@ export class AgentGateway {
       status: record.status,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
-      backend: record.acpSessionId,
+      ...(record.acpSessionId ? { backend: record.acpSessionId } : {}),
       workspaceId: record.workspaceId,
       ...(record.availableModeIds.length > 0
         ? { modes: record.availableModeIds }

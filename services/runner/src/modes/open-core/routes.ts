@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentGateway } from "../../agent/gateway.js";
 import type { AppConfig } from "../../config.js";
-import { authorize, readJson, sendJson } from "../../http/index.js";
+import { readJson, sendJson } from "../../http/index.js";
 import type { Logger } from "../../logger.js";
 import { handleSessionHttp } from "../../sessions/index.js";
 import type { HealthStatus } from "../../types.js";
@@ -11,14 +11,15 @@ import {
   handleWorkspaceHttp,
   type WorkspaceRegistry,
 } from "../../workspaces/index.js";
+import { handleSetupHttp, type SetupController } from "../../setup/index.js";
 
 export interface OpenCoreRouteContext {
   config: AppConfig;
-  apiToken: string | undefined;
   getBridge: (workspaceId?: string | null) => VfsBridge | null;
   workspaces: WorkspaceRegistry;
   /** ACP agent gateway when sessions are enabled. */
   agentGateway: AgentGateway | null;
+  setup: SetupController;
   logger: Logger;
 }
 
@@ -48,12 +49,17 @@ export async function handleOpenCoreRequest(
     return;
   }
 
-  if (!authorize(req, ctx.apiToken)) {
+  if (await handleSetupHttp(req, res, method, url, ctx.setup)) {
+    return;
+  }
+
+  if (!ctx.setup.authorizeDevice(req)) {
     sendJson(res, 401, { error: "unauthorized" });
     return;
   }
 
   if (method === "GET" && url.pathname === "/v1/status") {
+    const setup = ctx.setup.operatorStatus();
     sendJson(res, 200, {
       mode: ctx.config.mode,
       version: ctx.config.version,
@@ -63,10 +69,12 @@ export async function handleOpenCoreRequest(
         : undefined,
       agentTransport: ctx.config.SESSIONS_ENABLED ? "stdio" : undefined,
       sessionsManaged: Boolean(ctx.agentGateway),
-      authRequired: Boolean(ctx.apiToken),
+      authRequired: true,
+      runnerId: await ctx.setup.runnerId(),
       vfsEnabled: ctx.config.VFS_ENABLED,
       terminalEnabled: ctx.config.TERMINAL_ENABLED,
       defaultWorkspaceId: ctx.workspaces.defaultId(),
+      setupPhase: setup.phase,
     });
     return;
   }

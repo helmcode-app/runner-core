@@ -48,11 +48,9 @@ describe("loadConfig", () => {
 
   it("treats empty strings as unset", () => {
     const cfg = loadConfig({
-      OPENCORE_API_TOKEN: "",
       AGENT_DEFAULT_MODEL: "",
       AGENT_API_KEY: "",
     });
-    assert.equal(cfg.OPENCORE_API_TOKEN, undefined);
     assert.equal(cfg.AGENT_DEFAULT_MODEL, undefined);
     assert.equal(cfg.AGENT_API_KEY, undefined);
     assert.equal(cfg.AGENT_PROVIDER, undefined);

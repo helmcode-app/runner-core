@@ -10,7 +10,9 @@ iPad  ── /v1/sessions/* ──►  runner Agent Gateway  ──ACP/stdio─�
 
 - Public paths and JSON **never** name the vendor runtime.
 - Gateway keeps Helm session ids, timeline, and SSE fan-out.
+- Timeline + checkpoints persist under `$WORKSPACES_PATH/.sessions` (survives runner restart).
 - Async prompts keep running if the iPad disconnects (ACP turn continues).
+- Native TUI chats (OpenCode / Claude / Pi) are **not** imported — those stores stay on the desktop.
 
 Design: [ACP-first runtime](../design/acp-first-runtime.md).
 
@@ -30,7 +32,7 @@ AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 
 Harness install knobs are catalog defaults + overlays (`agent/harnesses/`).
 
-HelmCode auth: `OPENCORE_API_TOKEN` Bearer (same as other `/v1/*` routes).
+HelmCode auth: device Bearer (same as other `/v1/*` routes).
 
 Details: [OpenCode](./opencode.md), [all harnesses](./harnesses.md).
 
@@ -42,7 +44,7 @@ REST + SSE for the iPad. Method names follow ACP session verbs; the wire
 format stays HTTP JSON (not ACP JSON-RPC).
 
 | Method | Path | ACP | Description |
-|--------|------|-----|-------------|
+| -------- | ------ | ----- | ------------- |
 | `GET` | `/v1/sessions/health` | — | Runtime liveness (`provider: "acp"`) |
 | `GET` | `/v1/sessions/models` | — | Catalog (`id` = `provider/model`) |
 | `GET` | `/v1/sessions/events` | `session/update` | SSE of `SessionStreamEvent` |
@@ -101,7 +103,7 @@ plus `AGENT_DEFAULT_MODEL`. `?refresh=1` re-probes the harness.
 ```
 
 | Field | Notes |
-|-------|--------|
+| ------- | -------- |
 | `thinkLevel` | `low` / `medium` / `high` / `xhigh`. Mapped to ACP `session/set_config_option` (`thought_level`) when the harness advertises it; also sent on `_meta.helm`. |
 | `fast` | Boolean. Mapped to a `fast` / `model_config` option when advertised; also sent on `_meta.helm`. |
 
@@ -129,15 +131,16 @@ cwd, rewind snapshots, and `AgentSession.workspaceId` follow that workspace.
 1. `POST /v1/sessions` → ACP `session/new` → Helm `{ session }` (**201**)
 2. `POST …/prompt` → ACP `session/prompt` in background → **202**. The first user prompt becomes `session.title` when the current title is still a placeholder (`New chat`, empty, …). Later prompts do not rename it.
 3. Live: `GET /v1/sessions/events` → Gateway SSE (`session.connected`, message/tool deltas, status, `session.updated`)
-4. Reconnect: `GET …/history` then reopen events
-5. Stop: `POST …/cancel` → ACP `session/cancel`
+4. Reconnect: `GET /v1/sessions` → `GET …/history` then reopen events
+5. After a **runner restart**, the same Helm ids come back from disk; ACP is rebuilt on the next prompt (seeded with prior turns). In-flight turns do not survive process death.
+6. Stop: `POST …/cancel` → ACP `session/cancel`
 
 ---
 
 ## Layout
 
 | Path | Role |
-|------|------|
+| ------ | ------ |
 | `src/sessions/` | Product HTTP/SSE |
 | `src/sessions/title.ts` | Chat name from first user prompt |
 | `src/agent/` | ACP client, gateway, permission / models |

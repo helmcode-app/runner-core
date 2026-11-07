@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { startOpenCore, type OpenCoreServer } from "../../src/modes/open-core/index.js";
+import {
+  startOpenCore,
+  type OpenCoreServer,
+} from "../../src/modes/open-core/index.js";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import {
   createLocalGitFixture,
   makeTempDir,
@@ -11,11 +16,14 @@ import {
 
 describe("open-core HTTP API", () => {
   let root = "";
+  let workspacesPath = "";
   let svc: OpenCoreServer | undefined;
+  let apiToken = "";
 
   before(async () => {
     root = await makeTempDir("helm-http-");
     const fx = await createLocalGitFixture(root);
+    workspacesPath = fx.workspacesPath;
     const config = testConfig({
       MAIN_REPO_PATH: fx.mainRepoPath,
       WORKSPACES_PATH: fx.workspacesPath,
@@ -25,6 +33,41 @@ describe("open-core HTTP API", () => {
     svc = await startOpenCore(config, testLogger(), {
       installSignalHandlers: false,
     });
+    const raw = JSON.parse(
+      await readFile(
+        path.join(workspacesPath, ".setup", "enrollments.json"),
+        "utf8",
+      ),
+    ) as { bootstrap?: { code?: string } };
+    assert.ok(raw.bootstrap?.code);
+    const pub = await fetch(url("/v1/setup"));
+    assert.equal(pub.status, 200);
+    const pubBody = (await pub.json()) as {
+      paired: boolean;
+      authRequired: boolean;
+      repo?: unknown;
+    };
+    assert.equal(pubBody.paired, false);
+    assert.equal(pubBody.authRequired, true);
+    assert.equal(pubBody.repo, undefined);
+    const done = await fetch(url("/v1/setup/enroll"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        code: raw.bootstrap.code,
+        deviceName: "Test iPad",
+      }),
+    });
+    assert.equal(done.status, 200);
+    const paired = (await done.json()) as {
+      status: string;
+      token: string;
+      runnerId: string;
+    };
+    assert.equal(paired.status, "complete");
+    apiToken = paired.token;
+    assert.ok(apiToken);
+    assert.ok(paired.runnerId);
   });
 
   after(async () => {
@@ -35,6 +78,10 @@ describe("open-core HTTP API", () => {
   function url(p: string): string {
     assert.ok(svc);
     return `${svc.baseUrl}${p}`;
+  }
+
+  function authHeaders(): HeadersInit {
+    return apiToken ? { authorization: `Bearer ${apiToken}` } : {};
   }
 
   it("GET /health", async () => {
@@ -50,28 +97,37 @@ describe("open-core HTTP API", () => {
     assert.equal(body.sessionsEnabled, false);
   });
 
+  it("GET /v1/status requires Bearer", async () => {
+    const bare = await fetch(url("/v1/status"));
+    assert.equal(bare.status, 401);
+  });
+
   it("GET /v1/status", async () => {
-    const res = await fetch(url("/v1/status"));
+    const res = await fetch(url("/v1/status"), { headers: authHeaders() });
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       mode: string;
       sessionsEnabled: boolean;
       authRequired: boolean;
+      setupPhase: string;
     };
     assert.equal(body.mode, "open-core");
     assert.equal(body.sessionsEnabled, false);
-    assert.equal(body.authRequired, false);
+    assert.equal(body.authRequired, true);
+    assert.equal(body.setupPhase, "ready");
   });
 
   it("GET /v1/sessions/* returns 503 when disabled", async () => {
-    const res = await fetch(url("/v1/sessions/health"));
+    const res = await fetch(url("/v1/sessions/health"), {
+      headers: authHeaders(),
+    });
     assert.equal(res.status, 503);
     const body = (await res.json()) as { error: string };
     assert.match(body.error, /disabled/i);
   });
 
   it("GET /v1/workspaces lists the primary workspace", async () => {
-    const res = await fetch(url("/v1/workspaces"));
+    const res = await fetch(url("/v1/workspaces"), { headers: authHeaders() });
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       defaultWorkspaceId: string;
@@ -85,52 +141,7 @@ describe("open-core HTTP API", () => {
   });
 
   it("unknown path → 404", async () => {
-    const res = await fetch(url("/v1/tasks"));
+    const res = await fetch(url("/v1/tasks"), { headers: authHeaders() });
     assert.equal(res.status, 404);
-  });
-});
-
-describe("open-core HTTP auth", () => {
-  let root = "";
-  let svc: OpenCoreServer | undefined;
-
-  before(async () => {
-    root = await makeTempDir("helm-http-auth-");
-    const fx = await createLocalGitFixture(root);
-    const config = testConfig({
-      MAIN_REPO_PATH: fx.mainRepoPath,
-      WORKSPACES_PATH: fx.workspacesPath,
-      HOST: "127.0.0.1",
-      PORT: "0",
-      OPENCORE_API_TOKEN: "secret-token",
-    });
-    svc = await startOpenCore(config, testLogger(), {
-      installSignalHandlers: false,
-    });
-  });
-
-  after(async () => {
-    await svc?.close();
-    if (root) await removeTempDir(root);
-  });
-
-  function url(p: string): string {
-    assert.ok(svc);
-    return `${svc.baseUrl}${p}`;
-  }
-
-  it("GET /health stays open", async () => {
-    const res = await fetch(url("/health"));
-    assert.equal(res.status, 200);
-  });
-
-  it("GET /v1/status requires Bearer", async () => {
-    const bare = await fetch(url("/v1/status"));
-    assert.equal(bare.status, 401);
-
-    const ok = await fetch(url("/v1/status"), {
-      headers: { authorization: "Bearer secret-token" },
-    });
-    assert.equal(ok.status, 200);
   });
 });

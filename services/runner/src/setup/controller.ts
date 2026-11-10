@@ -169,6 +169,18 @@ export class SetupController {
       hasRepo,
       workspaces,
     );
+    if (config.REVIEW_SETUP_CODE) {
+      log.info("review setup code enabled", {
+        reusable: true,
+        expires: false,
+      });
+      if (!opts.quiet) {
+        process.stdout.write(
+          `Helm review setup code: ${config.REVIEW_SETUP_CODE}\n` +
+            "Non-expiring and reusable (REVIEW_SETUP_CODE). Enter it in HelmCode → Add runner.\n\n",
+        );
+      }
+    }
     const fresh = await ctl.ensureBootstrapCode();
     if (fresh && !opts.quiet) ctl.printSetupCode(fresh, "enroll");
     return ctl;
@@ -261,7 +273,16 @@ export class SetupController {
   ): Promise<EnrollResult> {
     this.assertEnrollRate(req);
     try {
-      const result = await this.mutate(() => enroll(this.dir, code, deviceName));
+      const result = await this.mutate(() =>
+        enroll(
+          this.dir,
+          code,
+          deviceName,
+          this.config.REVIEW_SETUP_CODE
+            ? { reviewSetupCode: this.config.REVIEW_SETUP_CODE }
+            : undefined,
+        ),
+      );
       if (result.status === "complete") await this.markPaired();
       this.clearEnrollFailures(req);
       return result;

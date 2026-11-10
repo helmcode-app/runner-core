@@ -79,6 +79,44 @@ describe("device enrollment", () => {
     }
   });
 
+  it("accepts REVIEW_SETUP_CODE without expiry and reuses it", async () => {
+    const root = await makeTempDir("helm-devices-review-");
+    try {
+      const fx = await createLocalGitFixture(root);
+      const reviewCode = "ABCD-EFGH";
+      const setup = await createSetup(
+        testConfig({
+          MAIN_REPO_PATH: fx.mainRepoPath,
+          WORKSPACES_PATH: fx.workspacesPath,
+          REVIEW_SETUP_CODE: reviewCode,
+        }),
+      );
+
+      const first = await setup.enrollDevice(
+        { socket: {} } as never,
+        reviewCode,
+        "Review iPad 1",
+      );
+      assert.equal(first.status, "complete");
+      if (first.status !== "complete") return;
+
+      const second = await setup.enrollDevice(
+        { socket: {} } as never,
+        "abcdefgh",
+        "Review iPad 2",
+      );
+      assert.equal(second.status, "complete");
+      if (second.status !== "complete") return;
+      assert.notEqual(second.token, first.token);
+      assert.equal(second.runnerId, first.runnerId);
+
+      assert.ok(matchTokenSync(`${fx.workspacesPath}/.setup`, first.token));
+      assert.ok(matchTokenSync(`${fx.workspacesPath}/.setup`, second.token));
+    } finally {
+      await removeTempDir(root);
+    }
+  });
+
   it("refuses to revoke the last device and issues a single-use ws ticket", async () => {
     const root = await makeTempDir("helm-devices-revoke-");
     try {

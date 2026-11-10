@@ -23,15 +23,16 @@ Used only when `agent.json` is missing (CI / compose). Same fields as the PUT bo
 
 | Kind | harness | provider | apiKey |
 |------|---------|----------|--------|
-| Multi-provider shell | `opencode` (later `pi` / `goose`) | **required** | key for that provider |
+| Multi-provider shell | `opencode` (later `pi` / `goose`) | **required** (`opencode-go`) | OpenCode Go API key (also unlocks free `opencode/*`) |
 | Single-vendor product | `claude` / `codex` / `cursor` / `grok` | **unused** | key for that product |
 
 ```bash
+# OpenCode Go — free opencode/* models work on the same connection
 SESSIONS_ENABLED=true
 AGENT_HARNESS=opencode
 AGENT_PROVIDER=opencode-go
 AGENT_API_KEY=oc-…
-AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
+AGENT_DEFAULT_MODEL=opencode/beam-free
 ```
 
 Install / mode / binary knobs stay in code overlays, not env.

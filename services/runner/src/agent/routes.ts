@@ -9,7 +9,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readJson, sendJson } from "../http/index.js";
 import { AGENT_HARNESS_IDS, type AgentHarnessId } from "./harnesses/catalog.js";
-import { isAgentProviderId } from "./harnesses/opencode/auth.js";
+import {
+  isAgentProviderId,
+  normalizeAgentProviderId,
+} from "./harnesses/opencode/auth.js";
 import type { AgentConfigUpdate } from "./config-store.js";
 import {
   AgentConfigError,
@@ -113,13 +116,20 @@ function parseAgentConfigUpdate(
   };
 
   if (row.provider !== undefined) {
-    if (typeof row.provider !== "string" || !isAgentProviderId(row.provider)) {
+    if (typeof row.provider !== "string") {
       return {
         ok: false,
-        error: "provider must be opencode-go or opencode-go-plus",
+        error: "provider must be opencode-go (aliases: opencode, opencode-go-plus)",
       };
     }
-    value.provider = row.provider;
+    const provider = normalizeAgentProviderId(row.provider);
+    if (!provider || !isAgentProviderId(row.provider)) {
+      return {
+        ok: false,
+        error: "provider must be opencode-go (aliases: opencode, opencode-go-plus)",
+      };
+    }
+    value.provider = provider;
   }
 
   if (row.apiKey !== undefined) {

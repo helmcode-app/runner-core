@@ -62,7 +62,7 @@ describe("loadConfig", () => {
       AGENT_API_KEY: "secret",
       AGENT_DEFAULT_MODEL: "opencode-go/glm-5.1",
     });
-    assert.equal(cfg.AGENT_PROVIDER, "opencode-go-plus");
+    assert.equal(cfg.AGENT_PROVIDER, "opencode-go");
     assert.equal(cfg.AGENT_API_KEY, "secret");
     assert.equal(cfg.AGENT_DEFAULT_MODEL, "opencode-go/glm-5.1");
   });
@@ -95,5 +95,26 @@ describe("loadConfig", () => {
         }),
       /Invalid environment configuration/,
     );
+  });
+
+  it("normalizes REVIEW_SETUP_CODE", () => {
+    const cfg = loadConfig({ REVIEW_SETUP_CODE: "abcdefgh" });
+    assert.equal(cfg.REVIEW_SETUP_CODE, "ABCD-EFGH");
+  });
+
+  it("rejects invalid REVIEW_SETUP_CODE", () => {
+    assert.throws(
+      () => loadConfig({ REVIEW_SETUP_CODE: "too-short" }),
+      /Invalid REVIEW_SETUP_CODE/,
+    );
+  });
+
+  it("normalizes legacy opencode provider to opencode-go", () => {
+    const cfg = loadConfig({
+      AGENT_PROVIDER: "opencode",
+      AGENT_DEFAULT_MODEL: "opencode/beam-free",
+    });
+    assert.equal(cfg.AGENT_PROVIDER, "opencode-go");
+    assert.equal(cfg.AGENT_DEFAULT_MODEL, "opencode/beam-free");
   });
 });

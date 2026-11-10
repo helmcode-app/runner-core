@@ -1,9 +1,22 @@
 import { z } from "zod";
 import { AGENT_HARNESS_IDS } from "./agent/harnesses/ids.js";
+import { normalizeAgentProviderId } from "./agent/harnesses/opencode/auth.js";
+import { normalizeEnrollmentCode } from "./setup/codes.js";
 import type { HelmMode } from "./types.js";
 import { envBool } from "./util/env.js";
 
 const helmModeSchema = z.enum(["open-core"]);
+
+/**
+ * Accept canonical + legacy aliases; loadConfig normalizes to `opencode-go`.
+ * Keep in sync with normalizeAgentProviderId in opencode/auth.ts.
+ */
+const agentProviderSchema = z.enum([
+ "opencode-go",
+ "opencode",
+ "opencode-go-plus",
+ "opencode-zen",
+]);
 
 const envSchema = z.object({
  // ── Runtime mode ───────────────────────────────────────────
@@ -37,6 +50,13 @@ const envSchema = z.object({
  /** App-level heartbeat interval for terminal WS (ms). 0 disables. */
  TERMINAL_HEARTBEAT_MS: z.coerce.number().int().min(0).default(25_000),
 
+ // ── Setup / App Review ─────────────────────────────────────
+ /**
+  * Optional non-expiring, reusable enrollment code (`XXXX-XXXX`).
+  * For App Review / demo runners only — leave unset in production.
+  */
+ REVIEW_SETUP_CODE: z.string().optional(),
+
  // ── Agent sessions (ACP Client → harness ACP Server) ───────
  /**
   * Bootstrap only: when true and no `$WORKSPACES_PATH/.setup/agent.json`,
@@ -53,7 +73,7 @@ const envSchema = z.object({
   * Bootstrap LLM vendor inside OpenCode when no agent.json.
   * Unused for single-vendor harnesses.
   */
- AGENT_PROVIDER: z.enum(["opencode-go", "opencode-go-plus"]).optional(),
+ AGENT_PROVIDER: agentProviderSchema.optional(),
  /**
   * Bootstrap API key when no agent.json.
   * Prefer PUT /v1/agent so the key lands in agent.json (mode 0600).
@@ -61,6 +81,7 @@ const envSchema = z.object({
  AGENT_API_KEY: z.string().optional(),
  /**
   * Bootstrap default model when no agent.json.
+  * Free Zen example still works with Go connected: `opencode/beam-free`.
   */
  AGENT_DEFAULT_MODEL: z.string().optional(),
 });
@@ -95,8 +116,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
  }
 
  const data = parsed.data;
+ let reviewSetupCode = data.REVIEW_SETUP_CODE?.trim();
+ if (reviewSetupCode) {
+  const normalized = normalizeEnrollmentCode(reviewSetupCode);
+  if (!normalized) {
+   throw new Error(
+    "Invalid REVIEW_SETUP_CODE: expected 8-character code like ABCD-EFGH",
+   );
+  }
+  reviewSetupCode = normalized;
+ } else {
+  reviewSetupCode = undefined;
+ }
+
+ const providerRaw = data.AGENT_PROVIDER;
+ const provider = providerRaw
+  ? normalizeAgentProviderId(providerRaw) ?? undefined
+  : undefined;
+
  return {
   ...data,
+  REVIEW_SETUP_CODE: reviewSetupCode,
+  AGENT_PROVIDER: provider,
   mode: data.HELM_MODE,
   version: loadVersion(),
  };

@@ -16,7 +16,7 @@ describe("agent models catalog", () => {
     });
     const catalog = await loadAgentModelsCatalog(cfg, { forceRefresh: true });
     assert.ok(catalog.models.some((m) => m.id === "opencode-go/glm-5.1"));
-    assert.deepEqual(catalog.connected, ["opencode-go"]);
+    assert.deepEqual(catalog.connected, ["opencode-go", "opencode"]);
     assert.equal(catalog.defaultModel, "opencode-go/glm-5.1");
   });
 
@@ -34,7 +34,7 @@ describe("agent models catalog", () => {
     });
     assert.ok(catalog.models.some((m) => m.id === "opencode-go/glm-5.2"));
     assert.ok(catalog.models.some((m) => m.id === "opencode-go/kimi-k2.6"));
-    assert.deepEqual(catalog.connected, ["opencode-go"]);
+    assert.deepEqual(catalog.connected, ["opencode-go", "opencode"]);
   });
 
   it("advertises the implied vendor for a single-vendor harness", async () => {

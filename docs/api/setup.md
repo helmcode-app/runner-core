@@ -9,9 +9,18 @@ iPad          →  Add runner → URL + code + device name
               →  Runner page → GitHub + clone, or open the repo already on disk
 ```
 
-The code is eight characters, `XXXX-XXXX`, from an unambiguous alphabet. It is not an API token. It expires in 10 minutes and is single-use.
+The code is eight characters, `XXXX-XXXX`, from an unambiguous alphabet. It is not an API token. Bootstrap / invite codes expire in 10 minutes and are single-use.
 
 `HOST_REPO` only skips GitHub clone. Pairing still requires a setup code.
+
+### Review / demo code (optional)
+
+Set `REVIEW_SETUP_CODE=ABCD-EFGH` for App Review or a public demo runner. That code:
+
+- Does **not** expire
+- Is **reusable** (each enroll still gets its own device Bearer)
+- Completes immediately (no second-device approval)
+- Should stay unset in production
 
 ## Three ways in
 
@@ -20,6 +29,7 @@ The code is eight characters, `XXXX-XXXX`, from an unambiguous alphabet. It is n
 | No devices yet | Runner process, or `setup:enroll` | Enroll completes immediately |
 | Another device exists | That device, `POST /v1/setup/invites` | Enroll stays pending until the first device allows it |
 | Every device is gone | `setup:recover` on the machine | Revokes all tokens immediately, then same as first enroll |
+| `REVIEW_SETUP_CODE` set | Operator via env | Enroll with that fixed code anytime |
 
 Network requests cannot mint a bootstrap or recovery code.
 

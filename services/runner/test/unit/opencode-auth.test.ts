@@ -6,7 +6,9 @@ import { afterEach, describe, it } from "node:test";
 import {
   AGENT_PROVIDER_AUTH_IDS,
   buildOpenCodeAuthFile,
+  enabledOpenCodeProviderIds,
   materializeOpenCodeAuth,
+  normalizeAgentProviderId,
   resolveOpenCodeAuthPath,
   resolveOpenCodeAuthProviders,
   serializeOpenCodeAuthFile,
@@ -24,7 +26,9 @@ afterEach(async () => {
 describe("OpenCode auth (ACP harness)", () => {
   it("maps AGENT_PROVIDER to auth.json ids", () => {
     assert.equal(AGENT_PROVIDER_AUTH_IDS["opencode-go"], "opencode-go");
-    assert.equal(AGENT_PROVIDER_AUTH_IDS["opencode-go-plus"], "opencode-go");
+    assert.equal(normalizeAgentProviderId("opencode"), "opencode-go");
+    assert.equal(normalizeAgentProviderId("opencode-go-plus"), "opencode-go");
+    assert.equal(normalizeAgentProviderId("opencode-zen"), "opencode-go");
   });
 
   it("resolves provider slots from AGENT_*", () => {
@@ -58,8 +62,8 @@ describe("OpenCode auth (ACP harness)", () => {
       home,
     });
     assert.equal(authPath, resolveOpenCodeAuthPath(home));
-    assert.deepEqual(providerIds, ["opencode-go"]);
-    const raw = JSON.parse(await readFile(authPath, "utf8")) as Record<
+    assert.deepEqual(providerIds, ["opencode-go", "opencode"]);
+    const raw = JSON.parse(await readFile(authPath!, "utf8")) as Record<
       string,
       { type: string; key: string }
     >;
@@ -76,10 +80,22 @@ describe("OpenCode auth (ACP harness)", () => {
     const { providerIds } = await materializeOpenCodeAuth(cfg, undefined, {
       home,
     });
-    assert.deepEqual(providerIds, ["opencode-go"]);
+    assert.deepEqual(providerIds, ["opencode-go", "opencode"]);
     const raw = JSON.parse(
       await readFile(resolveOpenCodeAuthPath(home), "utf8"),
     ) as Record<string, { key: string }>;
     assert.equal(raw["opencode-go"]?.key, "plus-key");
+  });
+
+  it("requires API key even for legacy opencode alias", () => {
+    const cfg = loadConfig({
+      AGENT_PROVIDER: "opencode",
+      AGENT_DEFAULT_MODEL: "opencode/beam-free",
+    });
+    assert.equal(cfg.AGENT_PROVIDER, "opencode-go");
+    assert.throws(
+      () => resolveOpenCodeAuthProviders(cfg),
+      /AGENT_API_KEY is required/,
+    );
   });
 });

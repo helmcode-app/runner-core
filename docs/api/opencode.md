@@ -21,13 +21,16 @@ The only OpenCode-specific step is writing `auth.json`. See
 ```bash
 SESSIONS_ENABLED=true
 AGENT_HARNESS=opencode
-AGENT_PROVIDER=opencode-go   # or opencode-go-plus (same auth id)
+AGENT_PROVIDER=opencode-go
 AGENT_API_KEY=…
-AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
+AGENT_DEFAULT_MODEL=opencode/beam-free   # or opencode-go/…
 ```
 
-OpenCode is a multi-provider shell: both `AGENT_HARNESS` and `AGENT_PROVIDER`
-are required. Claude / Codex / Cursor / Grok only need the harness + key.
+OpenCode is a multi-provider shell: `AGENT_HARNESS` + `AGENT_PROVIDER=opencode-go`
++ `AGENT_API_KEY` are required. Free Zen models (`opencode/*`) work on the same
+Go connection — there is no separate keyless Helm provider. Legacy ids
+`opencode` / `opencode-go-plus` / `opencode-zen` normalize to `opencode-go`.
+Claude / Codex / Cursor / Grok only need the harness + key.
 
 When the app enables OpenCode (`PUT /v1/agent`), runner installs `opencode-ai`
 (if missing) and spawns `opencode acp`. Cold start does not install. Install
@@ -51,13 +54,12 @@ Needs **outbound network** to npm on first enable. Persist `/app/.opencode` with
 
 ## Auth
 
-- **LLM keys:** `AGENT_PROVIDER` + `AGENT_API_KEY` → OpenCode `auth.json`
+- **LLM keys:** `AGENT_PROVIDER=opencode-go` + `AGENT_API_KEY` → OpenCode `auth.json`
 - **Runner ingress:** device Bearer (unrelated to OpenCode)
 
 | `AGENT_PROVIDER` | auth.json id | model prefix |
 |------------------|--------------|--------------|
-| `opencode-go` | `opencode-go` | `opencode-go/…` |
-| `opencode-go-plus` | `opencode-go` | `opencode-go/…` |
+| `opencode-go` | `opencode-go` | `opencode-go/…` and free `opencode/…` |
 
 ---
 

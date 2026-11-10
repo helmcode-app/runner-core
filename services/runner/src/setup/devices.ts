@@ -340,16 +340,40 @@ export async function recoverDevices(dir: string): Promise<string> {
   return issueBootstrap(dir, "recover");
 }
 
+export interface EnrollOptions {
+  /**
+   * Non-expiring, reusable App Review / demo code (`XXXX-XXXX`).
+   * When it matches, enroll completes immediately without consuming bootstrap
+   * or invite codes.
+   */
+  reviewSetupCode?: string;
+}
+
 export async function enroll(
   dir: string,
   codeRaw: string,
   deviceNameRaw: string,
+  opts?: EnrollOptions,
 ): Promise<EnrollResult> {
   const code = normalizeEnrollmentCode(codeRaw);
   if (!code) throw new DeviceStoreError(400, "invalid or expired setup code");
   const name = normalizeName(deviceNameRaw);
   const enrollments = await loadEnrollments(dir);
   const devices = await loadDevices(dir);
+
+  const review = opts?.reviewSetupCode
+    ? normalizeEnrollmentCode(opts.reviewSetupCode)
+    : null;
+  if (review && codesEqual(review, code)) {
+    const created = addDevice(devices, name);
+    await saveDevices(dir, created.file);
+    return {
+      status: "complete",
+      deviceId: created.deviceId,
+      token: created.token,
+      runnerId: created.file.runnerId,
+    };
+  }
 
   if (
     enrollments.bootstrap &&

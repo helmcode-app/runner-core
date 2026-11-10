@@ -101,7 +101,18 @@ describe("connected providers", () => {
       AGENT_PROVIDER: "opencode-go",
       AGENT_API_KEY: "k",
     });
-    assert.deepEqual(connectedProviderIds(cfg), ["opencode-go"]);
+    assert.deepEqual(connectedProviderIds(cfg), ["opencode-go", "opencode"]);
+  });
+
+  it("normalizes legacy opencode provider alias to Go", () => {
+    const cfg = loadConfig({
+      AGENT_HARNESS: "opencode",
+      AGENT_PROVIDER: "opencode",
+      AGENT_API_KEY: "k",
+      AGENT_DEFAULT_MODEL: "opencode/beam-free",
+    });
+    assert.equal(cfg.AGENT_PROVIDER, "opencode-go");
+    assert.deepEqual(connectedProviderIds(cfg), ["opencode-go", "opencode"]);
   });
 
   it("uses the implied vendor when harness is single-vendor", () => {

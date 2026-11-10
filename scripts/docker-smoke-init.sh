@@ -10,6 +10,8 @@ set -eu
 MAIN_REPO_PATH="${MAIN_REPO_PATH:-/app/main_repo}"
 WORKSPACES_PATH="${WORKSPACES_PATH:-/app/workspaces}"
 BARE_PATH="${BARE_PATH:-/app/remote.git}"
+# Fly / persistent volume: set HOME=/data/home so OpenCode auth + installs survive restarts.
+HOME_DIR="${HOME:-/app}"
 
 # Clear directory contents without removing the mount point.
 clear_dir() {
@@ -26,8 +28,8 @@ repo_ready() {
 
 # Volume mounts are often root-owned; fix ownership when we start as root.
 if [ "$(id -u)" = "0" ]; then
-  mkdir -p "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH"
-  chown -R helm:helm "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" || true
+  mkdir -p "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" "$HOME_DIR"
+  chown -R helm:helm "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" "$HOME_DIR" || true
 fi
 
 # compose.dev leaves MAIN_REPO empty so the setup page can clone from GitHub.
@@ -55,7 +57,7 @@ if ! repo_ready && [ "$SEED_GIT_FIXTURE" = "true" ]; then
   cd /app
 
   if [ "$(id -u)" = "0" ]; then
-    chown -R helm:helm "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" || true
+    chown -R helm:helm "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" "$HOME_DIR" || true
   fi
   echo "[smoke-init] fixture ready (branch main → origin)"
 elif repo_ready; then
@@ -67,14 +69,15 @@ fi
 export HELM_MODE="${HELM_MODE:-open-core}"
 export MAIN_REPO_PATH
 export WORKSPACES_PATH
+export HOME="$HOME_DIR"
 
-echo "[smoke-init] starting runner-core (HELM_MODE=$HELM_MODE)"
+echo "[smoke-init] starting runner-core (HELM_MODE=$HELM_MODE HOME=$HOME)"
 
 # Drop to non-root for the long-running process when possible.
 if [ "$(id -u)" = "0" ] && command -v runuser >/dev/null 2>&1; then
-  exec runuser -u helm -- node /app/dist/entrypoint.js
+  exec runuser -u helm -- env HOME="$HOME_DIR" node /app/dist/entrypoint.js
 fi
 if [ "$(id -u)" = "0" ] && command -v su >/dev/null 2>&1; then
-  exec su -s /bin/sh helm -c "exec node /app/dist/entrypoint.js"
+  exec su -s /bin/sh helm -c "export HOME='$HOME_DIR'; exec node /app/dist/entrypoint.js"
 fi
 exec node /app/dist/entrypoint.js

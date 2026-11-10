@@ -67,6 +67,7 @@ export {
   enabledOpenCodeProviderIds,
   isAgentProviderId,
   materializeOpenCodeAuth,
+  normalizeAgentProviderId,
   resolveOpenCodeAuthPath,
   resolveOpenCodeAuthProviders,
   resolveOpenCodeHome,

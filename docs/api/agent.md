@@ -80,7 +80,7 @@ API keys are never returned in full.
 | ------- | ------- |
 | `enabled` | required boolean |
 | `harness` | required: `opencode` / `claude` / `codex` / `cursor` / `grok` |
-| `provider` | required when `harness=opencode` (`opencode-go` / `opencode-go-plus`) |
+| `provider` | required when `harness=opencode` (`opencode-go`; aliases `opencode` / `opencode-go-plus` / `opencode-zen`) |
 | `apiKey` | omit to keep previous; empty string clears |
 | `defaultModel` | omit to keep; `null` clears |
 

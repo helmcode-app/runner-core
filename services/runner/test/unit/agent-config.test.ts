@@ -56,16 +56,37 @@ describe("agent config store", () => {
       }) ?? "",
       /provider/i,
     );
-    assert.equal(
+    assert.match(
       validateAgentConfig({
         version: 1,
         enabled: true,
         harness: "opencode",
         provider: "opencode-go",
         updatedAt: "2026-01-01T00:00:00.000Z",
+      }) ?? "",
+      /apiKey/i,
+    );
+    assert.equal(
+      validateAgentConfig({
+        version: 1,
+        enabled: true,
+        harness: "opencode",
+        provider: "opencode-go",
+        apiKey: "k",
+        updatedAt: "2026-01-01T00:00:00.000Z",
       }),
       null,
     );
+  });
+
+  it("normalizes legacy provider aliases on merge", () => {
+    const next = mergeAgentConfigUpdate(null, {
+      enabled: true,
+      harness: "opencode",
+      provider: "opencode" as never,
+      apiKey: "k",
+    });
+    assert.equal(next.provider, "opencode-go");
   });
 
   it("keeps previous apiKey when update omits it", () => {

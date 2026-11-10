@@ -24,7 +24,7 @@ import {
   harnessNeedsProvider,
 } from "./harnesses/catalog.js";
 import {
-  isAgentProviderId,
+  normalizeAgentProviderId,
   type AgentProviderId,
 } from "./harnesses/opencode/auth.js";
 
@@ -79,10 +79,8 @@ export function parsePersistedAgentConfig(
   };
   if (row.provider !== undefined) {
     if (typeof row.provider !== "string") return null;
-    // Legacy OpenCode Zen plan → Go Plus (same product family replacement).
-    const provider =
-      row.provider === "opencode-zen" ? "opencode-go-plus" : row.provider;
-    if (!isAgentProviderId(provider)) return null;
+    const provider = normalizeAgentProviderId(row.provider);
+    if (!provider) return null;
     out.provider = provider;
   }
   if (row.apiKey !== undefined) {
@@ -157,12 +155,14 @@ export function mergeAgentConfigUpdate(
   };
 
   if (update.provider !== undefined) {
-    next.provider = update.provider;
+    const provider = normalizeAgentProviderId(update.provider);
+    if (provider) next.provider = provider;
   } else if (
     previous?.provider &&
     previous.harness === update.harness
   ) {
-    next.provider = previous.provider;
+    const provider = normalizeAgentProviderId(previous.provider);
+    if (provider) next.provider = provider;
   }
 
   if (update.apiKey !== undefined) {
@@ -193,6 +193,9 @@ export function validateAgentConfig(config: PersistedAgentConfig): string | null
   if (!config.enabled) return null;
   if (harnessNeedsProvider(config.harness) && !config.provider) {
     return `provider is required when harness=${config.harness}`;
+  }
+  if (config.harness === "opencode" && !config.apiKey?.trim()) {
+    return "apiKey is required when harness=opencode (connect OpenCode Go; free opencode/* models still work)";
   }
   return null;
 }

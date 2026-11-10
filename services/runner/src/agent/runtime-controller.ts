@@ -31,7 +31,7 @@ import { createHarnessRuntime } from "./harnesses/create.js";
 import type { HarnessOverlay } from "./harnesses/stdio-settings.js";
 import type { HarnessRuntime, HarnessStatus } from "./harnesses/types.js";
 import {
-  isAgentProviderId,
+  normalizeAgentProviderId,
   type AgentProviderId,
 } from "./harnesses/opencode/auth.js";
 
@@ -211,8 +211,12 @@ class AgentRuntimeControllerImpl implements AgentRuntimeController {
       ) {
         throw new AgentConfigError(`unknown harness: ${update.harness}`);
       }
-      if (update.provider !== undefined && !isAgentProviderId(update.provider)) {
-        throw new AgentConfigError(`unknown provider: ${update.provider}`);
+      if (update.provider !== undefined) {
+        const normalized = normalizeAgentProviderId(update.provider);
+        if (!normalized) {
+          throw new AgentConfigError(`unknown provider: ${update.provider}`);
+        }
+        update = { ...update, provider: normalized };
       }
 
       const next = mergeAgentConfigUpdate(this.selectionState, update);

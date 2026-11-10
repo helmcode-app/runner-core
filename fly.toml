@@ -1,0 +1,64 @@
+# Fly.io — App Review / demo runner
+# Deploy from this directory:
+#   fly apps create helmcode-review
+#   fly volumes create runner_data --region iad --size 1
+#   fly secrets set AGENT_API_KEY=…   # OpenCode Go key (required for agent)
+#   fly deploy
+# Free `opencode/*` models (e.g. beam-free) work once Go is connected.
+
+app = "helmcode-review"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  # smoke entrypoint seeds a demo git repo on first boot, then starts the runner.
+  target = "smoke"
+
+[env]
+  HELM_MODE = "open-core"
+  HOST = "0.0.0.0"
+  PORT = "8080"
+  HOME = "/data/home"
+  MAIN_REPO_PATH = "/data/main_repo"
+  WORKSPACES_PATH = "/data/workspaces"
+  BARE_PATH = "/data/remote.git"
+  VFS_ENABLED = "true"
+  TERMINAL_ENABLED = "true"
+  TERMINAL_WORKDIR = "/data/main_repo"
+  SEED_GIT_FIXTURE = "true"
+  # Non-expiring reusable enroll code for App Review notes.
+  REVIEW_SETUP_CODE = "HELM-R3V9"
+  # Bootstrap OpenCode with Go; set AGENT_API_KEY via `fly secrets`.
+  # Leave false until the secret exists, or enable from the app (PUT /v1/agent).
+  SESSIONS_ENABLED = "false"
+  AGENT_HARNESS = "opencode"
+  AGENT_PROVIDER = "opencode-go"
+  AGENT_DEFAULT_MODEL = "opencode/beam-free"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 10
+
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "5s"
+  grace_period = "45s"
+  method = "GET"
+  path = "/health"
+
+[[mounts]]
+  source = "runner_data"
+  destination = "/data"
+
+# Review-only: 1 shared vCPU + 1GB. 512MB is tight when OpenCode first npm-installs.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1024mb"

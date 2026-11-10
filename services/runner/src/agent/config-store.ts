@@ -135,7 +135,10 @@ export function agentConfigFromEnv(config: AppConfig): PersistedAgentConfig | nu
     harness: config.AGENT_HARNESS,
     updatedAt: new Date(0).toISOString(),
   };
-  if (config.AGENT_PROVIDER) out.provider = config.AGENT_PROVIDER;
+  if (config.AGENT_PROVIDER) {
+    const provider = normalizeAgentProviderId(config.AGENT_PROVIDER);
+    if (provider) out.provider = provider;
+  }
   if (config.AGENT_API_KEY?.trim()) out.apiKey = config.AGENT_API_KEY.trim();
   if (config.AGENT_DEFAULT_MODEL?.trim()) {
     out.defaultModel = config.AGENT_DEFAULT_MODEL.trim();

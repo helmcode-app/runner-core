@@ -1,0 +1,113 @@
+#!/bin/sh
+# Initialize an isolated local git fixture (when MAIN_REPO is empty) then start the runner.
+# Used by the Docker "smoke" target so the host needs no Node/git setup.
+#
+# IMPORTANT: MAIN_REPO_PATH / BARE_PATH / WORKSPACES_PATH may be Docker volume *mount
+# points*. Never `rm -rf` the directories themselves (→ "Device or resource busy").
+# Only clear their *contents*.
+set -eu
+
+MAIN_REPO_PATH="${MAIN_REPO_PATH:-/app/main_repo}"
+WORKSPACES_PATH="${WORKSPACES_PATH:-/app/workspaces}"
+BARE_PATH="${BARE_PATH:-/app/remote.git}"
+# Fly / persistent volume: set HOME=/data/home so OpenCode auth + installs survive restarts.
+HOME_DIR="${HOME:-/app}"
+
+# Clear directory contents without removing the mount point.
+clear_dir() {
+  dir="$1"
+  mkdir -p "$dir"
+  # shellcheck disable=SC2039
+  find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+}
+
+repo_ready() {
+  # Regular clone has .git/; bare repo has HEAD at root.
+  [ -d "$MAIN_REPO_PATH/.git" ] || [ -f "$MAIN_REPO_PATH/HEAD" ]
+}
+
+# Seed image-baked ACP harnesses into persistent HOME (Fly: /data/home).
+# With HOME!=/app the runner looks under $HOME/.helm/<id> and ~/.local/bin.
+seed_bundled_harnesses() {
+  bundled="/app/.bundled-harnesses"
+  [ -d "$bundled" ] || return 0
+  mkdir -p "$HOME_DIR/.helm" "$HOME_DIR/.local/bin"
+  for id in opencode claude codex grok; do
+    if [ -d "$bundled/$id" ]; then
+      rm -rf "$HOME_DIR/.helm/$id"
+      ln -sfn "$bundled/$id" "$HOME_DIR/.helm/$id"
+      echo "[smoke-init] linked harness $id → $HOME_DIR/.helm/$id"
+    fi
+  done
+  if [ -d "$bundled/local-bin" ]; then
+    for f in "$bundled/local-bin"/*; do
+      # Accept dangling-looking links that resolve inside the image tree.
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      ln -sfn "$f" "$HOME_DIR/.local/bin/$(basename "$f")"
+    done
+    echo "[smoke-init] linked Cursor CLI → $HOME_DIR/.local/bin"
+  fi
+  export PATH="$HOME_DIR/.local/bin:$HOME_DIR/.helm/opencode/bin:$HOME_DIR/.helm/claude/bin:$HOME_DIR/.helm/codex/bin:$HOME_DIR/.helm/grok/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
+}
+
+# Volume mounts are often root-owned; fix ownership when we start as root.
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" "$HOME_DIR"
+  seed_bundled_harnesses
+  chown -R helm:helm "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" "$HOME_DIR" || true
+else
+  seed_bundled_harnesses
+fi
+
+# compose.dev leaves MAIN_REPO empty so the setup page can clone from GitHub.
+# `docker compose up smoke` sets SEED_GIT_FIXTURE=true for a local fixture.
+SEED_GIT_FIXTURE="${SEED_GIT_FIXTURE:-false}"
+
+if ! repo_ready && [ "$SEED_GIT_FIXTURE" = "true" ]; then
+  echo "[smoke-init] seeding local git fixture at $MAIN_REPO_PATH"
+  clear_dir "$BARE_PATH"
+  clear_dir "$MAIN_REPO_PATH"
+
+  git init --bare "$BARE_PATH"
+  # Clone into existing empty directory (volume mount).
+  git clone "$BARE_PATH" "$MAIN_REPO_PATH"
+
+  cd "$MAIN_REPO_PATH"
+  git checkout -b main
+  printf '# smoke fixture\n' >README.md
+  printf 'hello\n' >hello.txt
+  git add -A
+  git -c user.email=agent@helmcode.app -c user.name="HelmCode Agent" \
+    commit -m "initial"
+  git push -u origin main
+  git fetch origin
+  cd /app
+
+  if [ "$(id -u)" = "0" ]; then
+    chown -R helm:helm "$MAIN_REPO_PATH" "$WORKSPACES_PATH" "$BARE_PATH" "$HOME_DIR" || true
+  fi
+  echo "[smoke-init] fixture ready (branch main → origin)"
+elif repo_ready; then
+  echo "[smoke-init] using existing repo at $MAIN_REPO_PATH"
+else
+  echo "[smoke-init] empty MAIN_REPO (no fixture); setup page will clone"
+fi
+
+export HELM_MODE="${HELM_MODE:-open-core}"
+export MAIN_REPO_PATH
+export WORKSPACES_PATH
+export HOME="$HOME_DIR"
+
+# Ensure PATH includes seeded harness bins for the runner process.
+export PATH="$HOME_DIR/.local/bin:$HOME_DIR/.helm/opencode/bin:$HOME_DIR/.helm/claude/bin:$HOME_DIR/.helm/codex/bin:$HOME_DIR/.helm/grok/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
+
+echo "[smoke-init] starting runner-core (HELM_MODE=$HELM_MODE HOME=$HOME)"
+
+# Drop to non-root for the long-running process when possible.
+if [ "$(id -u)" = "0" ] && command -v runuser >/dev/null 2>&1; then
+  exec runuser -u helm -- env HOME="$HOME_DIR" PATH="$PATH" node /app/dist/entrypoint.js
+fi
+if [ "$(id -u)" = "0" ] && command -v su >/dev/null 2>&1; then
+  exec su -s /bin/sh helm -c "export HOME='$HOME_DIR'; export PATH='$PATH'; exec node /app/dist/entrypoint.js"
+fi
+exec node /app/dist/entrypoint.js

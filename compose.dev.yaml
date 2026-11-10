@@ -48,9 +48,10 @@ services:
       TERMINAL_ENABLED: ${TERMINAL_ENABLED:-true}
       TERMINAL_WORKDIR: /app/main_repo
 
-      # Sessions: opt-in via SESSIONS_ENABLED. Harness install knobs are
+      # Sessions stay off until the app PUT /v1/agent (Update). Env is only a
+      # CI bootstrap when agent.json is missing. Harness install knobs are
       # catalog defaults + overlays, not env.
-      SESSIONS_ENABLED: ${SESSIONS_ENABLED:-true}
+      SESSIONS_ENABLED: ${SESSIONS_ENABLED:-false}
       AGENT_HARNESS: ${AGENT_HARNESS:-opencode}
       # Empty MAIN_REPO unless HOST_REPO is set (setup page clones).
       SEED_GIT_FIXTURE: ${SEED_GIT_FIXTURE:-false}

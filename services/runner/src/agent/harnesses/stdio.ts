@@ -1,9 +1,9 @@
 /**
  * Managed stdio ACP supervisor for every catalog harness.
  *
- * npm-installable adapters go into `$prefix`. PATH-only CLIs (Cursor)
- * resolve `agent` / `cursor-agent`. OpenCode writes auth.json first,
- * then uses the same install + spawn path as Claude / Codex / Grok.
+ * npm packages install into `$prefix`. Cursor uses the official curl
+ * installer into `~/.local/bin` (`agent` / `cursor-agent`). OpenCode
+ * writes auth.json first, then uses the same install + spawn path.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -27,6 +27,7 @@ import {
 } from "./catalog.js";
 import {
   findOnPath,
+  installCurlScript,
   installNpmPackage,
   isExecutable,
   isFloatingTag,
@@ -128,11 +129,12 @@ export class ManagedStdioAcpRuntime implements HarnessRuntime {
     return this.connection;
   }
 
-  async start(): Promise<void> {
+  async start(opts?: { install?: boolean }): Promise<void> {
     await this.serialize(async () => {
       this.stopping = false;
       await this.prepareAuth();
-      await this.ensureInstalled("boot");
+      // Default: install. Boot path passes install:false so cold start stays quiet.
+      await this.ensureInstalled(opts?.install === false ? "boot" : "configure");
       await this.startAcp();
       this.scheduleUpdates();
     });
@@ -222,11 +224,17 @@ export class ManagedStdioAcpRuntime implements HarnessRuntime {
     return prefixed;
   }
 
-  private async ensureInstalled(reason: "boot" | "update"): Promise<void> {
+  private canAutoInstall(): boolean {
+    return Boolean(this.settings.packageName || this.settings.curlInstallUrl);
+  }
+
+  private async ensureInstalled(
+    reason: "boot" | "configure" | "update",
+  ): Promise<void> {
     this.resolvedBin = await this.resolveBinary();
     const already = await isExecutable(this.resolvedBin);
 
-    if (already && (reason === "boot" || !this.settings.packageName)) {
+    if (already && reason === "boot") {
       this.installedVersion = await this.readBinaryVersion(this.resolvedBin);
       this.logger.info(`${this.spec.id} binary present`, {
         bin: this.resolvedBin,
@@ -236,7 +244,38 @@ export class ManagedStdioAcpRuntime implements HarnessRuntime {
       return;
     }
 
-    if (!this.settings.packageName) {
+    if (already && reason === "configure") {
+      this.installedVersion = await this.readBinaryVersion(this.resolvedBin);
+      this.logger.info(`${this.spec.id} binary present`, {
+        bin: this.resolvedBin,
+        version: this.installedVersion,
+        desired: this.settings.version,
+      });
+      return;
+    }
+
+    if (already && reason === "update" && this.settings.curlInstallUrl) {
+      await this.updateCurlInstalledBinary();
+      return;
+    }
+
+    if (already && reason === "update" && !this.settings.packageName) {
+      this.installedVersion = await this.readBinaryVersion(this.resolvedBin);
+      return;
+    }
+
+    // Cold boot / resume: never download — wait for app Update (configure).
+    if (reason === "boot") {
+      const tried = this.settings.pathCandidates.join(", ");
+      this.state = "error";
+      this.lastError = `binary missing: ${this.resolvedBin} (PATH: ${tried})`;
+      throw new Error(
+        `${this.spec.id} CLI is not installed yet. Enable ACP in the app and tap Update to install it. ` +
+          `Looked for: ${tried}`,
+      );
+    }
+
+    if (!this.canAutoInstall()) {
       const tried = this.settings.pathCandidates.join(", ");
       this.state = "error";
       this.lastError = `binary missing: ${this.resolvedBin} (PATH: ${tried})`;
@@ -248,9 +287,26 @@ export class ManagedStdioAcpRuntime implements HarnessRuntime {
 
     this.state = reason === "update" ? "updating" : "installing";
     this.lastError = undefined;
-    const spec = npmPackageSpec(this.settings.packageName, this.settings.version);
+
+    if (this.settings.packageName) {
+      await this.installViaNpm(reason);
+      return;
+    }
+
+    await this.installViaCurl(reason);
+  }
+
+  private async installViaNpm(
+    reason: "configure" | "update",
+  ): Promise<void> {
+    const packageName = this.settings.packageName;
+    if (!packageName) {
+      throw new Error(`${this.spec.id}: packageName missing for npm install`);
+    }
+    const spec = npmPackageSpec(packageName, this.settings.version);
     this.logger.info(`installing ${this.spec.id}`, {
       reason,
+      kind: "npm",
       spec,
       prefix: this.settings.prefix,
       npm: this.settings.npmBin,
@@ -277,6 +333,78 @@ export class ManagedStdioAcpRuntime implements HarnessRuntime {
       version: this.installedVersion,
       durationMs: result.durationMs,
     });
+  }
+
+  private async installViaCurl(
+    reason: "configure" | "update",
+  ): Promise<void> {
+    const url = this.settings.curlInstallUrl;
+    if (!url) {
+      throw new Error(`${this.spec.id}: curlInstallUrl missing`);
+    }
+    const home =
+      this.settings.home?.trim() ||
+      process.env.HOME?.trim() ||
+      undefined;
+    this.logger.info(`installing ${this.spec.id}`, {
+      reason,
+      kind: "curl",
+      url,
+      home: home ?? "(process default)",
+    });
+
+    const result = await installCurlScript({
+      url,
+      timeoutMs: this.settings.installTimeoutMs,
+      ...(home ? { home } : {}),
+    });
+
+    this.resolvedBin = await this.resolveBinary();
+    if (!(await isExecutable(this.resolvedBin))) {
+      const tried = this.settings.pathCandidates.join(", ");
+      this.state = "error";
+      this.lastError =
+        `binary missing after install (looked for: ${tried}). ` +
+        `Installer finished but PATH may not include ~/.local/bin.`;
+      throw new Error(this.lastError);
+    }
+
+    this.installedVersion = await this.readBinaryVersion(this.resolvedBin);
+    this.lastInstallAt = new Date().toISOString();
+    this.logger.info(`${this.spec.id} installed`, {
+      bin: this.resolvedBin,
+      version: this.installedVersion,
+      durationMs: result.durationMs,
+    });
+  }
+
+  /** Cursor CLI self-updates via `agent update`. */
+  private async updateCurlInstalledBinary(): Promise<void> {
+    const bin = this.resolvedBin;
+    if (!bin) return;
+    this.state = "updating";
+    this.lastError = undefined;
+    this.logger.info(`updating ${this.spec.id}`, { bin, kind: "self-update" });
+    try {
+      const result = await runCommand(bin, ["update"], {
+        cwd: path.dirname(bin),
+        timeoutMs: this.settings.installTimeoutMs,
+        maxOutputChars: 128 * 1024,
+      });
+      if (result.exitCode !== 0) {
+        this.logger.warn(`${this.spec.id} self-update exited non-zero`, {
+          exitCode: result.exitCode,
+          stderr: result.stderr.trim().slice(0, 500),
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`${this.spec.id} self-update failed`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    this.installedVersion = await this.readBinaryVersion(bin);
+    this.lastInstallAt = new Date().toISOString();
+    this.state = "ready";
   }
 
   private async readBinaryVersion(bin: string): Promise<string | undefined> {
@@ -426,7 +554,7 @@ export class ManagedStdioAcpRuntime implements HarnessRuntime {
   }
 
   private async runUpdateCycle(): Promise<void> {
-    if (!this.settings.packageName) return;
+    if (!this.canAutoInstall()) return;
     this.lastUpdateCheckAt = new Date().toISOString();
     this.logger.info(`${this.spec.id} update check`, {
       desired: this.settings.version,
@@ -441,11 +569,18 @@ export class ManagedStdioAcpRuntime implements HarnessRuntime {
       before &&
       after &&
       before === after &&
-      !isFloatingTag(this.settings.version)
+      !isFloatingTag(this.settings.version) &&
+      !this.settings.curlInstallUrl
     ) {
       this.logger.info(`${this.spec.id} already at desired version`, {
         version: after,
       });
+      this.state = "ready";
+      return;
+    }
+
+    // Curl CLIs self-update in place; restart ACP to pick up the new binary.
+    if (before && after && before === after && this.settings.curlInstallUrl) {
       this.state = "ready";
       return;
     }

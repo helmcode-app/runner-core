@@ -1,26 +1,37 @@
 # ACP harnesses
 
 Private notes for the ACP Server behind the Agent Gateway.
-Clients stay on [`/v1/sessions/*`](./sessions.md).
+Clients configure selection via [`/v1/agent`](./agent.md) and stay on
+[`/v1/sessions/*`](./sessions.md) for chats.
 
-## Env
+## Product path (preferred)
 
-| Kind | `AGENT_HARNESS` | `AGENT_PROVIDER` | `AGENT_API_KEY` |
-|------|-----------------|------------------|-----------------|
-| Multi-provider shell | `opencode` (later `pi` / `goose`) | **required** — which LLM | key for that provider |
+```bash
+# After device auth:
+curl -X PUT "$RUNNER/v1/agent" \
+  -H "authorization: Bearer …" \
+  -H "content-type: application/json" \
+  -d '{"enabled":true,"harness":"claude","apiKey":"sk-ant-…"}'
+```
+
+Persists to `$WORKSPACES_PATH/.setup/agent.json`. Switching `harness` stops the
+old ACP process and starts the new one.
+
+## Env bootstrap (optional)
+
+Used only when `agent.json` is missing (CI / compose). Same fields as the PUT body:
+
+| Kind | harness | provider | apiKey |
+|------|---------|----------|--------|
+| Multi-provider shell | `opencode` (later `pi` / `goose`) | **required** | key for that provider |
 | Single-vendor product | `claude` / `codex` / `cursor` / `grok` | **unused** | key for that product |
 
 ```bash
-# OpenCode (default) — two axes
+SESSIONS_ENABLED=true
 AGENT_HARNESS=opencode
 AGENT_PROVIDER=opencode-go
 AGENT_API_KEY=oc-…
 AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
-
-# Claude / Codex / Cursor / Grok — harness is the vendor
-AGENT_HARNESS=claude
-AGENT_API_KEY=sk-ant-…
-AGENT_DEFAULT_MODEL=anthropic/claude-sonnet-4-6
 ```
 
 Install / mode / binary knobs stay in code overlays, not env.
@@ -30,18 +41,21 @@ Install / mode / binary knobs stay in code overlays, not env.
 One supervisor (`harnesses/stdio.ts`) reads `HARNESS_SPECS`. OpenCode is not a
 second process manager — it only writes `auth.json` before the same spawn path.
 
-| `AGENT_HARNESS` | Spawn | Auth | Models `provider` |
-|-----------------|-------|------|-------------------|
-| `opencode` | `opencode acp` (npm `opencode-ai`) | `auth.json` via `AGENT_PROVIDER` | `opencode-go` / `opencode` |
+| harness id | Spawn | Auth | Models `provider` |
+|------------|-------|------|-------------------|
+| `opencode` | `opencode acp` (npm `opencode-ai`) | `auth.json` via `provider` | `opencode-go` (Go / Go Plus) |
 | `claude` | `@agentclientprotocol/claude-agent-acp` | `ANTHROPIC_API_KEY` | `anthropic` |
 | `codex` | `@agentclientprotocol/codex-acp` | `CODEX_API_KEY` (`OPENAI_API_KEY` fallback) | `openai` |
-| `cursor` | `agent acp` (Cursor CLI on PATH) | `CURSOR_API_KEY` | `cursor` |
+| `cursor` | `agent acp` (auto-install via `https://cursor.com/install`) | `CURSOR_API_KEY` | `cursor` |
 | `grok` | `grok agent stdio` (PATH or `@xai-official/grok`) | `XAI_API_KEY` | `xai` |
 
-Cursor is PATH-only (`agent` / `cursor-agent`, or overlay `bin`).
-Claude / Codex / Grok install into `~/.helm/<id>` (container: `/app/.helm/<id>`).
-OpenCode install prefix is `~/.helm/opencode` locally and `/app/.opencode` in
-the container (compose.dev volume `dev-opencode`).
+Runner **does not** install anything on cold start. Enabling / switching via
+`PUT /v1/agent` (app Update) **auto-installs** the ACP binary when missing:
+Claude / Codex / Grok / OpenCode via npm into `~/.helm/<id>` (container:
+`/app/.helm/<id>`; OpenCode uses `~/.helm/opencode` / `/app/.opencode`);
+Cursor via the official curl installer into `~/.local/bin` (`agent` /
+`cursor-agent`). Overlay `bin` still skips install. Restart only resumes an
+already-installed binary.
 
 Overlays: `services/runner/src/agent/harnesses/stdio-settings.ts`
 (`OPENCODE_HARNESS_OVERLAY`, `CLAUDE_HARNESS_OVERLAY`, `CODEX_HARNESS_OVERLAY`,

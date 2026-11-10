@@ -21,7 +21,7 @@ The only OpenCode-specific step is writing `auth.json`. See
 ```bash
 SESSIONS_ENABLED=true
 AGENT_HARNESS=opencode
-AGENT_PROVIDER=opencode-go   # or opencode-zen → auth id `opencode`
+AGENT_PROVIDER=opencode-go   # or opencode-go-plus (same auth id)
 AGENT_API_KEY=…
 AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 ```
@@ -29,22 +29,23 @@ AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 OpenCode is a multi-provider shell: both `AGENT_HARNESS` and `AGENT_PROVIDER`
 are required. Claude / Codex / Cursor / Grok only need the harness + key.
 
-When sessions are on, runner installs `opencode-ai` (if missing) and spawns
-`opencode acp`. Install paths, version, update interval, and ACP mode ids
-are **catalog defaults** in `services/runner/src/agent/harnesses/catalog.ts`.
-Local overrides: `OPENCODE_HARNESS_OVERLAY` in
+When the app enables OpenCode (`PUT /v1/agent`), runner installs `opencode-ai`
+(if missing) and spawns `opencode acp`. Cold start does not install. Install
+paths, version, update interval, and ACP mode ids are **catalog defaults** in
+`services/runner/src/agent/harnesses/catalog.ts`. Local overrides:
+`OPENCODE_HARNESS_OVERLAY` in
 `services/runner/src/agent/harnesses/stdio-settings.ts`.
 Do not add `OPENCODE_*` env vars.
 
-### Boot sequence
+### Enable sequence (app Update)
 
-1. Write `$HOME/.local/share/opencode/auth.json` from `AGENT_PROVIDER` + `AGENT_API_KEY`
+1. Write `$HOME/.local/share/opencode/auth.json` from `provider` + `apiKey`
 2. Ensure `$prefix/bin/opencode` (`npm install -g --prefix … opencode-ai@…`)
 3. Spawn `opencode acp` with `HOME` pointing at OpenCode home
 4. ACP `initialize` + keep connection for session RPCs
 5. Optional periodic reinstall + restart (default 24h; overlay `updateIntervalHours: 0` to disable)
 
-Needs **outbound network** to npm on first install. Persist `/app/.opencode` with a volume in Docker (`HOME=/app`). Local default prefix is `~/.helm/opencode`.
+Needs **outbound network** to npm on first enable. Persist `/app/.opencode` with a volume in Docker (`HOME=/app`). Local default prefix is `~/.helm/opencode`.
 
 ---
 
@@ -56,7 +57,7 @@ Needs **outbound network** to npm on first install. Persist `/app/.opencode` wit
 | `AGENT_PROVIDER` | auth.json id | model prefix |
 |------------------|--------------|--------------|
 | `opencode-go` | `opencode-go` | `opencode-go/…` |
-| `opencode-zen` | `opencode` | `opencode/…` |
+| `opencode-go-plus` | `opencode-go` | `opencode-go/…` |
 
 ---
 

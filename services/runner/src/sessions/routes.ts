@@ -39,9 +39,11 @@ import { proxySessionEvents } from "./sse.js";
 
 export interface SessionRouteContext {
   config: AppConfig;
-  /** Agent gateway when sessions are enabled. */
+  /** Agent gateway when sessions are enabled and ready. */
   gateway: AgentGateway | null;
   logger: Logger;
+  /** Optional phase from AgentRuntimeController for clearer 503s. */
+  agentPhase?: string;
 }
 
 const SESSION_ID_ACTION =
@@ -61,13 +63,17 @@ export async function handleSessionHttp(
 
   if (!ctx.config.SESSIONS_ENABLED) {
     sendJson(res, 503, {
-      error: "Agent sessions disabled (set SESSIONS_ENABLED=true)",
+      error:
+        "Agent sessions disabled (configure via PUT /v1/agent, or set SESSIONS_ENABLED=true)",
     });
     return true;
   }
 
   if (!ctx.gateway) {
-    sendJson(res, 503, { error: "Agent session runtime not configured" });
+    const phase = ctx.agentPhase ? ` (phase=${ctx.agentPhase})` : "";
+    sendJson(res, 503, {
+      error: `Agent session runtime not ready${phase}; check GET /v1/agent`,
+    });
     return true;
   }
 

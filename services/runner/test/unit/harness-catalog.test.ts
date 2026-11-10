@@ -68,6 +68,15 @@ describe("harness catalog", () => {
     assert.deepEqual(settings.args, []);
   });
 
+  it("auto-installs Cursor via the official curl installer", () => {
+    const spec = harnessSpec("cursor");
+    assert.equal(spec.packageName, undefined);
+    assert.equal(spec.curlInstallUrl, "https://cursor.com/install");
+    const settings = resolveStdioHarnessSettings(spec);
+    assert.equal(settings.curlInstallUrl, "https://cursor.com/install");
+    assert.deepEqual(settings.pathCandidates, ["agent", "cursor-agent"]);
+  });
+
   it("createHarnessRuntime selects every catalog harness through stdio", () => {
     for (const id of AGENT_HARNESS_IDS) {
       const cfg = loadConfig({

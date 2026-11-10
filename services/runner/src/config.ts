@@ -39,31 +39,28 @@ const envSchema = z.object({
 
  // ── Agent sessions (ACP Client → harness ACP Server) ───────
  /**
-  * When true, expose `/v1/sessions/*` via the Agent Gateway (ACP client).
-  * Default false so unit tests / minimal boots stay quiet.
+  * Bootstrap only: when true and no `$WORKSPACES_PATH/.setup/agent.json`,
+  * start ACP from the AGENT_* env values below.
+  * Product path is PUT /v1/agent (persisted file). Default false.
   */
  SESSIONS_ENABLED: envBool(false),
  /**
-  * Which ACP Server harness to spawn.
-  * Multi-provider shells (`opencode`, later `pi` / `goose`) also need AGENT_PROVIDER.
-  * Single-vendor harnesses (`claude` / `codex` / `cursor` / `grok`) ignore AGENT_PROVIDER.
-  * Install/spawn knobs live in `agent/harnesses/`, not env.
+  * Bootstrap harness when SESSIONS_ENABLED and no agent.json.
+  * Runtime switching uses PUT /v1/agent.
   */
  AGENT_HARNESS: z.enum(AGENT_HARNESS_IDS).default("opencode"),
  /**
-  * LLM vendor inside a multi-provider harness (OpenCode auth.json ids).
-  * Unused when AGENT_HARNESS is claude / codex / cursor / grok.
+  * Bootstrap LLM vendor inside OpenCode when no agent.json.
+  * Unused for single-vendor harnesses.
   */
- AGENT_PROVIDER: z.enum(["opencode-go", "opencode-zen"]).optional(),
+ AGENT_PROVIDER: z.enum(["opencode-go", "opencode-go-plus"]).optional(),
  /**
-  * API key for the selected harness.
-  * OpenCode: written to auth.json for AGENT_PROVIDER.
-  * Single-vendor: injected as ANTHROPIC_API_KEY / CODEX_API_KEY / CURSOR_API_KEY / XAI_API_KEY.
+  * Bootstrap API key when no agent.json.
+  * Prefer PUT /v1/agent so the key lands in agent.json (mode 0600).
   */
  AGENT_API_KEY: z.string().optional(),
  /**
-  * Default model string for prompts (e.g. `opencode-go/glm-5.1` or `opencode/big-pickle`).
-  * When unset, the models catalog picks a preferred default among configured providers.
+  * Bootstrap default model when no agent.json.
   */
  AGENT_DEFAULT_MODEL: z.string().optional(),
 });

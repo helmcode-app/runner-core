@@ -79,12 +79,13 @@ docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 
 Full Docker notes: [`docs/testing-docker.md`](./docs/testing-docker.md).
 
-**Harness CLIs are not baked into the image.** When sessions are enabled the
-runner installs the catalog package at boot (OpenCode: `/app/.opencode` in
-the container, `~/.helm/opencode` locally; others: `/app/.helm/<id>`) and
-spawns the ACP command. First boot needs outbound network. Persist
-`/app/.opencode` and `/app/.helm` (compose.dev volumes) so restarts skip the
-download. Install knobs live in `agent/harnesses/catalog.ts` + overlays, not env.
+**Harness CLIs are not baked into the image.** Runner starts with ACP **off**.
+The app enables a harness via `PUT /v1/agent` (Update); only then does the
+runner install the package (OpenCode: `/app/.opencode` / `~/.helm/opencode`;
+others: `/app/.helm/<id>`; Cursor: `~/.local/bin`) and spawn ACP. That step
+needs outbound network. Persist `/app/.opencode` and `/app/.helm` (compose.dev
+volumes) so later enables skip the download. Install knobs live in
+`agent/harnesses/catalog.ts` + overlays, not env.
 
 ## Credentials & agent (ACP)
 
@@ -95,7 +96,7 @@ iPad / curl
 runner  /v1/sessions/*  |  /v1/vfs  |  /v1/terminal
     │  ACP (stdio ndjson)
     ▼
-opencode acp   ← managed: started by runner after boot install
+opencode acp   ← managed: installed + started after app Update
     │  Provider API keys (from auth.json)
     ▼
 LLM
@@ -103,9 +104,9 @@ LLM
 
 | Variable | Purpose |
 | ---------- | --------- |
-| `SESSIONS_ENABLED` | Expose `/v1/sessions/*` and boot the harness ACP Server |
-| `AGENT_HARNESS` | ACP Server: `opencode` (default), `claude`, `codex`, `cursor`, `grok` |
-| `AGENT_PROVIDER` | LLM vendor **inside** a multi-provider shell (`opencode-go` / `opencode-zen`). Unused for claude/codex/cursor/grok |
+| `SESSIONS_ENABLED` | Optional bootstrap when `agent.json` missing (product: `PUT /v1/agent`) |
+| `AGENT_HARNESS` | Bootstrap ACP Server id when env-enabled: `opencode`, `claude`, `codex`, `cursor`, `grok` |
+| `AGENT_PROVIDER` | LLM vendor **inside** a multi-provider shell (`opencode-go` / `opencode-go-plus`). Unused for claude/codex/cursor/grok |
 | `AGENT_API_KEY` | Key for that harness (OpenCode auth.json, or the product env var) |
 | `AGENT_DEFAULT_MODEL` | Default `provider/model` when prompt omits `model` |
 

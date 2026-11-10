@@ -62,8 +62,10 @@ async function main(): Promise<void> {
     node: process.version,
     mainRepo: config.MAIN_REPO_PATH,
     workspaces: config.WORKSPACES_PATH,
-    sessions: config.SESSIONS_ENABLED,
-    agentHarness: config.SESSIONS_ENABLED ? config.AGENT_HARNESS : undefined,
+    sessionsEnvBootstrap: config.SESSIONS_ENABLED,
+    agentHarnessEnv: config.SESSIONS_ENABLED
+      ? config.AGENT_HARNESS
+      : undefined,
   });
 
   await startMode(config, logger);

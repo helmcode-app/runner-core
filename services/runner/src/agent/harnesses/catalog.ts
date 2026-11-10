@@ -1,12 +1,12 @@
 /**
  * ACP harness catalog — spawn, auth, and provider policy for every
- * `AGENT_HARNESS`. The stdio supervisor reads this; do not add a second
- * process manager per vendor.
+ * harness id (`/v1/agent` or env bootstrap). The stdio supervisor reads this;
+ * do not add a second process manager per vendor.
  *
  * Two kinds:
- * - multi-provider (`opencode`, later `pi` / `goose`): AGENT_HARNESS + AGENT_PROVIDER + AGENT_API_KEY
- * - single-vendor (`claude` / `codex` / `cursor` / `grok`): AGENT_HARNESS + AGENT_API_KEY
- *   AGENT_PROVIDER is unused (the harness is the vendor).
+ * - multi-provider (`opencode`, later `pi` / `goose`): harness + provider + apiKey
+ * - single-vendor (`claude` / `codex` / `cursor` / `grok`): harness + apiKey
+ *   provider is unused (the harness is the vendor).
  */
 
 import type { AppConfig } from "../../config.js";
@@ -34,8 +34,13 @@ export interface HarnessSpec {
   /** Extra names that also get AGENT_API_KEY when unset (e.g. Codex). */
   apiKeyAliases?: string[];
   extraEnv?: Record<string, string>;
-  /** npm package to install into `$prefix` (omit for PATH-only CLIs). */
+  /** npm package to install into `$prefix` (omit for PATH-only / curl CLIs). */
   packageName?: string;
+  /**
+   * Official installer URL when the CLI is not on npm (e.g. Cursor).
+   * Runner downloads + runs the script on first enable / switch.
+   */
+  curlInstallUrl?: string;
   /** Binary name under `$prefix/bin` after npm install. */
   binName: string;
   args: string[];
@@ -95,6 +100,7 @@ export const HARNESS_SPECS: Record<AgentHarnessId, HarnessSpec> = {
     impliedProvider: "cursor",
     auth: "env",
     apiKeyEnv: "CURSOR_API_KEY",
+    curlInstallUrl: "https://cursor.com/install",
     binName: "agent",
     args: ["acp"],
     pathCandidates: ["agent", "cursor-agent"],

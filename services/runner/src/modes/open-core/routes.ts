@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AgentGateway } from "../../agent/gateway.js";
+import {
+  handleAgentHttp,
+  type AgentRuntimeController,
+} from "../../agent/index.js";
 import type { AppConfig } from "../../config.js";
 import { readJson, sendJson } from "../../http/index.js";
 import type { Logger } from "../../logger.js";
@@ -17,8 +20,7 @@ export interface OpenCoreRouteContext {
   config: AppConfig;
   getBridge: (workspaceId?: string | null) => VfsBridge | null;
   workspaces: WorkspaceRegistry;
-  /** ACP agent gateway when sessions are enabled. */
-  agentGateway: AgentGateway | null;
+  agent: AgentRuntimeController;
   setup: SetupController;
   logger: Logger;
 }
@@ -36,6 +38,8 @@ export async function handleOpenCoreRequest(
     `http://${req.headers.host ?? "localhost"}`,
   );
   const method = (req.method ?? "GET").toUpperCase();
+  const agentView = ctx.agent.view();
+  const sessionsReady = Boolean(ctx.agent.gateway);
 
   if (method === "GET" && url.pathname === "/health") {
     const body: HealthStatus = {
@@ -43,7 +47,7 @@ export async function handleOpenCoreRequest(
       mode: ctx.config.mode,
       version: ctx.config.version,
       uptimeMs: Math.floor(process.uptime() * 1000),
-      sessionsEnabled: Boolean(ctx.agentGateway),
+      sessionsEnabled: sessionsReady,
     };
     sendJson(res, 200, body);
     return;
@@ -63,12 +67,12 @@ export async function handleOpenCoreRequest(
     sendJson(res, 200, {
       mode: ctx.config.mode,
       version: ctx.config.version,
-      sessionsEnabled: Boolean(ctx.agentGateway),
-      agentHarness: ctx.config.SESSIONS_ENABLED
-        ? ctx.config.AGENT_HARNESS
-        : undefined,
-      agentTransport: ctx.config.SESSIONS_ENABLED ? "stdio" : undefined,
-      sessionsManaged: Boolean(ctx.agentGateway),
+      sessionsEnabled: sessionsReady,
+      agentConfigured: agentView.enabled,
+      agentPhase: agentView.phase,
+      agentHarness: agentView.enabled ? agentView.harness : undefined,
+      agentTransport: agentView.enabled ? "stdio" : undefined,
+      sessionsManaged: sessionsReady,
       authRequired: true,
       runnerId: await ctx.setup.runnerId(),
       vfsEnabled: ctx.config.VFS_ENABLED,
@@ -76,6 +80,10 @@ export async function handleOpenCoreRequest(
       defaultWorkspaceId: ctx.workspaces.defaultId(),
       setupPhase: setup.phase,
     });
+    return;
+  }
+
+  if (await handleAgentHttp(req, res, method, url.pathname, { agent: ctx.agent })) {
     return;
   }
 
@@ -108,9 +116,10 @@ export async function handleOpenCoreRequest(
 
   if (
     await handleSessionHttp(req, res, method, url.pathname, {
-      config: ctx.config,
-      gateway: ctx.agentGateway,
+      config: ctx.agent.effectiveConfig,
+      gateway: ctx.agent.gateway,
       logger: ctx.logger,
+      agentPhase: agentView.phase,
     })
   ) {
     return;

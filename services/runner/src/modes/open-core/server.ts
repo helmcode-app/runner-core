@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import {
-  createAgentRuntime,
+  createAgentRuntimeController,
   type AgentGateway,
-  type AgentRuntime,
+  type AgentRuntimeController,
 } from "../../agent/index.js";
 import type { HarnessOverlay } from "../../agent/harnesses/stdio-settings.js";
 import type { AppConfig } from "../../config.js";
@@ -24,9 +24,9 @@ export interface OpenCoreServer {
   baseUrl: string;
   vfs: VfsGateway;
   terminal: TerminalGateway;
-  /** ACP agent gateway when sessions are enabled. */
+  /** Live ACP gateway when agent config is enabled and ready. */
   agentGateway: AgentGateway | null;
-  agentRuntime: AgentRuntime | null;
+  agent: AgentRuntimeController;
   close(): Promise<void>;
 }
 
@@ -43,6 +43,7 @@ export interface StartOpenCoreOptions {
  * - `/v1/workspaces` — workspace catalog (default = MAIN_REPO_PATH)
  * - `/v1/vfs`        — VFS JSON-RPC (`?workspaceId=`)
  * - `/v1/terminal`   — WebSSH (`?workspaceId=`)
+ * - `/v1/agent`      — select / switch ACP harness + API key
  * - `/v1/sessions`   — agent sessions (ACP Client → harness ACP Server)
  */
 export async function startOpenCore(
@@ -61,26 +62,11 @@ export async function startOpenCore(
     setupPhase: setup.operatorStatus().phase,
   });
 
-  const agentRuntime = createAgentRuntime(config, logger, {
+  const agent = createAgentRuntimeController(config, logger, {
     workspaces,
     ...(opts.harnessOverlay ? { harnessOverlay: opts.harnessOverlay } : {}),
   });
-  if (agentRuntime) {
-    log.info("starting agent runtime", {
-      harness: config.AGENT_HARNESS,
-      transport: "stdio",
-      managed: true,
-    });
-    await agentRuntime.start();
-  }
-
-  const agentGateway = agentRuntime?.gateway ?? null;
-  if (agentGateway) {
-    log.info("agent sessions enabled", {
-      harness: config.AGENT_HARNESS,
-      provider: "acp",
-    });
-  }
+  await agent.boot();
 
   let vfs: VfsGateway = {
     bridge: null,
@@ -95,7 +81,7 @@ export async function startOpenCore(
         config,
         getBridge: (workspaceId) => vfs.getBridge(workspaceId),
         workspaces,
-        agentGateway,
+        agent,
         setup,
         logger,
       });
@@ -136,20 +122,23 @@ export async function startOpenCore(
 
   const host = config.HOST === "0.0.0.0" ? "127.0.0.1" : config.HOST;
   const port = address.port;
+  const agentView = agent.view();
   log.info("open-core listening", {
     host: config.HOST,
     port,
     vfs: Boolean(vfs.bridge),
     terminalWs: terminal.enabled ? "/v1/terminal" : "disabled",
-    sessions: agentGateway ? `acp:${config.AGENT_HARNESS}` : "disabled",
+    sessions: agent.gateway
+      ? `acp:${agentView.harness ?? "unknown"}`
+      : agentView.enabled
+        ? `pending:${agentView.phase}`
+        : "disabled",
   });
 
   const close = async (): Promise<void> => {
     await terminal.close();
     await vfs.close();
-    if (agentRuntime) {
-      await agentRuntime.stop();
-    }
+    await agent.stop();
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
@@ -175,8 +164,10 @@ export async function startOpenCore(
     baseUrl: `http://${host}:${port}`,
     vfs,
     terminal,
-    agentGateway,
-    agentRuntime,
+    get agentGateway() {
+      return agent.gateway;
+    },
+    agent,
     close,
   };
 }

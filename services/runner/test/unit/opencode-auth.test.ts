@@ -24,7 +24,7 @@ afterEach(async () => {
 describe("OpenCode auth (ACP harness)", () => {
   it("maps AGENT_PROVIDER to auth.json ids", () => {
     assert.equal(AGENT_PROVIDER_AUTH_IDS["opencode-go"], "opencode-go");
-    assert.equal(AGENT_PROVIDER_AUTH_IDS["opencode-zen"], "opencode");
+    assert.equal(AGENT_PROVIDER_AUTH_IDS["opencode-go-plus"], "opencode-go");
   });
 
   it("resolves provider slots from AGENT_*", () => {
@@ -66,20 +66,20 @@ describe("OpenCode auth (ACP harness)", () => {
     assert.equal(raw["opencode-go"]?.key, "go-key");
   });
 
-  it("maps opencode-zen to auth id opencode", async () => {
+  it("maps opencode-go-plus to the same auth id as Go", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "oc-auth-"));
     tempDirs.push(home);
     const cfg = loadConfig({
-      AGENT_PROVIDER: "opencode-zen",
-      AGENT_API_KEY: "zen-key",
+      AGENT_PROVIDER: "opencode-go-plus",
+      AGENT_API_KEY: "plus-key",
     });
     const { providerIds } = await materializeOpenCodeAuth(cfg, undefined, {
       home,
     });
-    assert.deepEqual(providerIds, ["opencode"]);
+    assert.deepEqual(providerIds, ["opencode-go"]);
     const raw = JSON.parse(
       await readFile(resolveOpenCodeAuthPath(home), "utf8"),
     ) as Record<string, { key: string }>;
-    assert.equal(raw.opencode?.key, "zen-key");
+    assert.equal(raw["opencode-go"]?.key, "plus-key");
   });
 });

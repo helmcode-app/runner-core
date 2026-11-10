@@ -5,8 +5,8 @@
  *   $HOME/.local/share/opencode/auth.json
  *
  * Configured via AGENT_PROVIDER + AGENT_API_KEY:
- *   opencode-go  → auth.json `opencode-go`  / models `opencode-go/<model>`
- *   opencode-zen → auth.json `opencode`     / models `opencode/<model>`
+ *   opencode-go       → auth.json `opencode-go` / models `opencode-go/<model>`
+ *   opencode-go-plus  → same auth id (Go Plus is a higher OpenCode Go plan)
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -20,15 +20,21 @@ export interface OpenCodeHomeSettings {
 }
 
 /** Helm AGENT_PROVIDER values supported today. */
-export type AgentProviderId = "opencode-go" | "opencode-zen";
+export const AGENT_PROVIDER_IDS = ["opencode-go", "opencode-go-plus"] as const;
+
+export type AgentProviderId = (typeof AGENT_PROVIDER_IDS)[number];
+
+export function isAgentProviderId(value: string): value is AgentProviderId {
+  return (AGENT_PROVIDER_IDS as readonly string[]).includes(value);
+}
 
 /**
  * Map Helm AGENT_PROVIDER → OpenCode auth.json / catalog provider id.
- * Extend this table when adding providers.
+ * Go and Go Plus share the OpenCode Go credential slot.
  */
 export const AGENT_PROVIDER_AUTH_IDS: Record<AgentProviderId, string> = {
   "opencode-go": "opencode-go",
-  "opencode-zen": "opencode",
+  "opencode-go-plus": "opencode-go",
 };
 
 export interface OpenCodeAuthEntry {
@@ -55,7 +61,7 @@ export function resolveOpenCodeAuthProviders(
   if (!provider && !key) return [];
   if (!provider) {
     throw new Error(
-      "AGENT_PROVIDER is required when AGENT_API_KEY is set (e.g. opencode-go, opencode-zen)",
+      "AGENT_PROVIDER is required when AGENT_API_KEY is set (e.g. opencode-go, opencode-go-plus)",
     );
   }
   if (!key) {

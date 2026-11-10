@@ -58,13 +58,13 @@ describe("loadConfig", () => {
 
   it("parses AGENT_PROVIDER + AGENT_API_KEY", () => {
     const cfg = loadConfig({
-      AGENT_PROVIDER: "opencode-zen",
+      AGENT_PROVIDER: "opencode-go-plus",
       AGENT_API_KEY: "secret",
-      AGENT_DEFAULT_MODEL: "opencode/big-pickle",
+      AGENT_DEFAULT_MODEL: "opencode-go/glm-5.1",
     });
-    assert.equal(cfg.AGENT_PROVIDER, "opencode-zen");
+    assert.equal(cfg.AGENT_PROVIDER, "opencode-go-plus");
     assert.equal(cfg.AGENT_API_KEY, "secret");
-    assert.equal(cfg.AGENT_DEFAULT_MODEL, "opencode/big-pickle");
+    assert.equal(cfg.AGENT_DEFAULT_MODEL, "opencode-go/glm-5.1");
   });
 
   it("rejects unknown AGENT_PROVIDER", () => {

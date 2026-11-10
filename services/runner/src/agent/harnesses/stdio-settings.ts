@@ -12,6 +12,8 @@ import type { HarnessModeIds } from "./types.js";
 
 export interface StdioHarnessSettings {
   packageName?: string;
+  /** Official curl installer (Cursor CLI). */
+  curlInstallUrl?: string;
   version: string;
   prefix: string;
   /** Override binary path (skips prefix/PATH lookup). */
@@ -69,6 +71,8 @@ export function resolveStdioHarnessSettings(
   const bin = overlay?.bin ?? fileOverlay.bin;
   const home = overlay?.home ?? fileOverlay.home;
   const packageName = overlay?.packageName ?? fileOverlay.packageName ?? spec.packageName;
+  const curlInstallUrl =
+    overlay?.curlInstallUrl ?? fileOverlay.curlInstallUrl ?? spec.curlInstallUrl;
   return {
     version:
       overlay?.version ?? fileOverlay.version ?? STDIO_DEFAULTS.version,
@@ -80,6 +84,9 @@ export function resolveStdioHarnessSettings(
     ...(bin?.trim() ? { bin: bin.trim() } : {}),
     ...(home?.trim() ? { home: home.trim() } : {}),
     ...(packageName?.trim() ? { packageName: packageName.trim() } : {}),
+    ...(curlInstallUrl?.trim()
+      ? { curlInstallUrl: curlInstallUrl.trim() }
+      : {}),
     npmBin: overlay?.npmBin ?? fileOverlay.npmBin ?? STDIO_DEFAULTS.npmBin,
     installTimeoutMs:
       overlay?.installTimeoutMs ??

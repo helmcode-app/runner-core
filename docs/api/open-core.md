@@ -23,6 +23,7 @@ Agent product API: [sessions.md](./sessions.md). VFS: [vfs.md](./vfs.md). Termin
 | `*` | `/v1/setup*` | mixed | First-boot setup (see [setup.md](./setup.md)) |
 | `GET` | `/v1/status` | yes* | Runtime status |
 | `*` | `/v1/workspaces*` | yes* | Workspace catalog (see [workspaces.md](./workspaces.md)) |
+| `*` | `/v1/agent` | yes* | ACP harness selection (see [agent.md](./agent.md)) |
 | `*` | `/v1/sessions/*` | yes* | Agent sessions (see [sessions.md](./sessions.md)) |
 | `*` | `/v1/vfs/*` | yes* | VFS HTTP helpers (see [vfs.md](./vfs.md)) |
 
@@ -56,14 +57,17 @@ Agent product API: [sessions.md](./sessions.md). VFS: [vfs.md](./vfs.md). Termin
   "mode": "open-core",
   "version": "0.1.0",
   "sessionsEnabled": true,
+  "agentConfigured": true,
+  "agentPhase": "ready",
   "agentHarness": "opencode",
   "agentTransport": "stdio",
   "sessionsManaged": true,
-  "authRequired": false,
+  "authRequired": true,
   "vfsEnabled": true,
   "terminalEnabled": true
 }
 ```
 
-`agentHarness` is the ACP Server (`opencode`, `claude`, `codex`, `cursor`, `grok`).  
-`AGENT_PROVIDER` is only the LLM vendor **inside** a multi-provider shell (OpenCode).
+`sessionsEnabled` means the ACP gateway is ready. `agentConfigured` /
+`agentPhase` come from [`/v1/agent`](./agent.md). `agentHarness` is the ACP
+Server (`opencode`, `claude`, `codex`, `cursor`, `grok`).

@@ -20,15 +20,17 @@ Design: [ACP-first runtime](../design/acp-first-runtime.md).
 
 ## Enable
 
-**Managed OpenCode ACP** (local + cloud):
+Preferred: configure from the client after pairing:
 
 ```bash
-SESSIONS_ENABLED=true
-AGENT_HARNESS=opencode
-AGENT_PROVIDER=opencode-go
-AGENT_API_KEY=oc-…
-AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
+curl -X PUT "$RUNNER/v1/agent" \
+  -H "authorization: Bearer …" \
+  -H "content-type: application/json" \
+  -d '{"enabled":true,"harness":"opencode","provider":"opencode-go","apiKey":"oc-…"}'
 ```
+
+See [agent.md](./agent.md). Env `SESSIONS_ENABLED` / `AGENT_*` still bootstraps
+when `agent.json` is absent.
 
 Harness install knobs are catalog defaults + overlays (`agent/harnesses/`).
 
@@ -74,8 +76,11 @@ File diffs / branch checkout stay on VFS (`vfs/gitDiff`, `vfs/gitCheckout`).
 
 ### Models (`GET /v1/sessions/models`)
 
-Catalog comes from the harness ACP `configOptions` (OpenCode model selector),
-plus `AGENT_DEFAULT_MODEL`. `?refresh=1` re-probes the harness.
+Catalog comes from the harness ACP `configOptions`. When the harness already
+advertised models, configured `AGENT_DEFAULT_MODEL` / extras are **not** mixed
+in (avoids stale OpenCode ids after switching to Cursor). `?refresh=1` re-probes
+the harness. `?model=<id>` selects that model first so Cursor-style agents
+advertise per-model effort / fast / context lists.
 
 ```json
 {
@@ -84,9 +89,21 @@ plus `AGENT_DEFAULT_MODEL`. `?refresh=1` re-probes the harness.
     { "id": "opencode-go/kimi-k2.6", "name": "kimi-k2.6", "provider": "opencode-go", "connected": true }
   ],
   "connected": ["opencode-go"],
-  "defaultModel": "opencode-go/glm-5.1"
+  "defaultModel": "opencode-go/glm-5.1",
+  "thinkLevels": ["low", "medium", "high", "xhigh"],
+  "thinkingLevels": ["false", "true"],
+  "contextLevels": ["200k", "1m"],
+  "supportsFast": true
 }
 ```
+
+Capability lists come from the harness ACP `configOptions` (and model names are
+stripped of Cursor-style `[context,effort/fast,…]` decorations):
+
+- `thinkLevels` — effort / reasoning ladder (empty → hide Effort)
+- `thinkingLevels` — thinking on/off toggle (empty → hide Thinking)
+- `contextLevels` — context window sizes (empty → hide Context)
+- `supportsFast: false` → hide Fast
 
 `AgentSession` may include `modes` (ACP ids advertised at `session/new`).
 
@@ -98,13 +115,17 @@ plus `AGENT_DEFAULT_MODEL`. `?refresh=1` re-probes the harness.
   "model": "opencode-go/glm-5.1",
   "mode": "agent",
   "thinkLevel": "medium",
+  "thinking": "true",
+  "context": "1m",
   "fast": false
 }
 ```
 
 | Field | Notes |
 | ------- | -------- |
-| `thinkLevel` | `low` / `medium` / `high` / `xhigh`. Mapped to ACP `session/set_config_option` (`thought_level`) when the harness advertises it; also sent on `_meta.helm`. |
+| `thinkLevel` | `low` / `medium` / `high` / `xhigh`. Mapped to ACP effort / reasoning `session/set_config_option` when advertised; also sent on `_meta.helm`. |
+| `thinking` | `true` / `false` for harnesses that advertise a thinking toggle. |
+| `context` | Context window size (`200k` / `1m` / …) when advertised. |
 | `fast` | Boolean. Mapped to a `fast` / `model_config` option when advertised; also sent on `_meta.helm`. |
 
 ### Usage (`GET /v1/sessions/:id/history`, `AgentSession.usage`)

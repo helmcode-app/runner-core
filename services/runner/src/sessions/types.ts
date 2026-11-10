@@ -112,6 +112,10 @@ export interface PromptRequest {
   messageId?: string;
   /** ACP thought/reasoning level (`session/set_config_option` + `_meta.helm`). */
   thinkLevel?: ThinkLevel | string;
+  /** Thinking on/off when the harness advertises a toggle (`true`/`false`). */
+  thinking?: string | boolean;
+  /** Context window size (`200k` / `1m` / …) when advertised. */
+  context?: string;
   /** Faster inference when true (`session/set_config_option` + `_meta.helm`). */
   fast?: boolean;
 }
@@ -173,6 +177,20 @@ export interface SessionModelsResponse {
   models: SessionModel[];
   connected: string[];
   defaultModel?: string;
+  /**
+   * Effort / reasoning levels the current harness accepts (product ids like
+   * `low`/`medium`/`high`/`xhigh`, or harness-native labels). Empty/omit =
+   * hide the Think control.
+   */
+  thinkLevels?: string[];
+  /** Thinking on/off values when advertised (`false`/`true`). */
+  thinkingLevels?: string[];
+  /** Context window sizes when advertised (`200k`/`1m`/…). */
+  contextLevels?: string[];
+  /** Current context window selection when known. */
+  context?: string;
+  /** Whether the harness advertises a fast / turbo option. */
+  supportsFast?: boolean;
 }
 
 export interface RuntimeHealthResponse {

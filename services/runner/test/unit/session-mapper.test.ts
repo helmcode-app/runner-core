@@ -205,6 +205,30 @@ describe("usageFromPromptResult", () => {
       { used: 2000, size: 200000 },
     );
   });
+
+  it("keeps used when usage_update omits size", () => {
+    const mapped = mapAcpSessionUpdate({
+      sessionId: "acp-1",
+      update: {
+        sessionUpdate: "usage_update",
+        used: 4200,
+      },
+    });
+    assert.deepEqual(mapped.usage, { used: 4200, size: 200000 });
+  });
+
+  it("maps inputTokens-shaped usage_update without used/size", () => {
+    const mapped = mapAcpSessionUpdate({
+      sessionId: "acp-1",
+      update: {
+        sessionUpdate: "usage_update",
+        inputTokens: 1500,
+        cachedReadTokens: 500,
+        outputTokens: 200,
+      },
+    });
+    assert.deepEqual(mapped.usage, { used: 2000, size: 200000 });
+  });
 });
 
 describe("mapStopReason", () => {

@@ -28,7 +28,7 @@ export const AGENT_SETTINGS_DEFAULTS: AgentSettings = {
  *
  * @example
  * export const AGENT_SETTINGS_OVERLAY = {
- *   extraModels: ["opencode/big-pickle"],
+ *   extraModels: ["opencode-go/glm-5.2"],
  * };
  */
 export const AGENT_SETTINGS_OVERLAY: Partial<AgentSettings> = {};

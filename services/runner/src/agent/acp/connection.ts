@@ -117,6 +117,11 @@ export async function connectAcpClient(options: {
                 boolean: {},
               },
             },
+            // Cursor: advertise here (not initialize top-level _meta) so
+            // session/new returns bare model ids + separate effort/fast/context.
+            _meta: {
+              parameterizedModelPicker: true,
+            },
           },
         });
         protocolVersion = init.protocolVersion ?? acp.PROTOCOL_VERSION;

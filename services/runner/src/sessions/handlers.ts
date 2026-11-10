@@ -38,7 +38,8 @@ export async function handleModels(
   try {
     const url = requestUrl(req);
     const forceRefresh = url.searchParams.get("refresh") === "1";
-    const mapped = await ctx.gateway.models(forceRefresh);
+    const probeModel = url.searchParams.get("model")?.trim() || undefined;
+    const mapped = await ctx.gateway.models(forceRefresh, probeModel);
     sendJson(res, 200, mapped);
   } catch (err) {
     sendJson(res, 502, {

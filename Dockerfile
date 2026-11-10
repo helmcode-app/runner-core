@@ -93,9 +93,9 @@ FROM base AS runtime
 WORKDIR /app
 ENV HELM_VFS_BIN=/app/bin/helm-vfs \
     VFS_ENABLED=true
-# OpenCode is NOT baked into the image. When SESSIONS_ENABLED, the runner
-# installs opencode-ai at boot into /app/.opencode (HOME=/app). Prefix must
-# be writable by `helm`. Override install knobs in harness settings.ts.
+# Harness CLIs are NOT baked into the image. The runner installs them when
+# the app enables ACP (PUT /v1/agent), into /app/.opencode or /app/.helm
+# (HOME=/app). Prefix must be writable by `helm`.
 RUN mkdir -p /app/main_repo /app/workspaces /app/remote.git /app/bin /app/.opencode \
     && useradd --system --uid 10001 --home /app --shell /usr/sbin/nologin helm \
     && chown -R helm:helm /app

@@ -60,32 +60,54 @@ function asAmount(value: unknown): number | undefined {
   return undefined;
 }
 
-/** Parse ACP `usage_update` (`used` / `size` / optional `cost`). */
+/** Fallback window when the harness reports tokens but not `size`. */
+export const DEFAULT_CONTEXT_SIZE = 200_000;
+
+function extractCost(
+  source: Record<string, unknown>,
+): SessionUsage["cost"] | undefined {
+  const costRaw = source.cost;
+  if (!costRaw || typeof costRaw !== "object") return undefined;
+  const c = costRaw as Record<string, unknown>;
+  const amount = asAmount(c.amount);
+  const currency = typeof c.currency === "string" ? c.currency.trim() : "";
+  if (amount === undefined || currency.length === 0) return undefined;
+  return { amount, currency };
+}
+
+function resolveSize(
+  source: Record<string, unknown>,
+  fallback?: SessionUsage,
+): number {
+  const size =
+    asTokenCount(source.size) ??
+    asTokenCount(source.context_size) ??
+    asTokenCount(source.contextSize) ??
+    asTokenCount(source.context_window) ??
+    asTokenCount(source.max_tokens);
+  if (size !== undefined && size > 0) return size;
+  if (fallback?.size && fallback.size > 0) return fallback.size;
+  return DEFAULT_CONTEXT_SIZE;
+}
+
+/**
+ * Parse ACP `usage_update` (`used` / `size` / optional `cost`).
+ * OpenCode may omit `size` when it cannot resolve a context limit — keep `used`.
+ */
 export function parseSessionUsage(
   update: Record<string, unknown>,
+  fallback?: SessionUsage,
 ): SessionUsage | undefined {
   const source =
     update.usage && typeof update.usage === "object"
       ? (update.usage as Record<string, unknown>)
       : update;
   const used = asTokenCount(source.used);
-  const size = asTokenCount(source.size);
-  if (used === undefined || size === undefined || size <= 0) return undefined;
-  const costRaw = source.cost;
-  let cost: SessionUsage["cost"];
-  if (costRaw && typeof costRaw === "object") {
-    const c = costRaw as Record<string, unknown>;
-    const amount = asAmount(c.amount);
-    const currency = typeof c.currency === "string" ? c.currency.trim() : "";
-    if (amount !== undefined && currency.length > 0) {
-      cost = { amount, currency };
-    }
-  }
+  if (used === undefined) return undefined;
+  const size = resolveSize(source, fallback);
+  const cost = extractCost(source) ?? fallback?.cost;
   return { used, size, ...(cost !== undefined ? { cost } : {}) };
 }
-
-/** Fallback window when the harness reports tokens but not `size`. */
-export const DEFAULT_CONTEXT_SIZE = 200_000;
 
 /**
  * Map ACP experimental `PromptResponse.usage` (inputTokens/…) onto Helm usage.
@@ -99,21 +121,55 @@ export function usageFromPromptResult(
     result.usage && typeof result.usage === "object"
       ? (result.usage as Record<string, unknown>)
       : result;
-  const direct = parseSessionUsage(nested);
+  const direct = parseSessionUsage(nested, fallback);
   if (direct) return direct;
 
-  const input = asTokenCount(nested.inputTokens) ?? 0;
-  const cached = asTokenCount(nested.cachedReadTokens) ?? 0;
-  const total = asTokenCount(nested.totalTokens);
-  const output = asTokenCount(nested.outputTokens);
-  const used = input + cached > 0 ? input + cached : (total ?? 0);
+  const input =
+    asTokenCount(nested.inputTokens) ??
+    asTokenCount(nested.input_tokens) ??
+    asTokenCount(nested.prompt_tokens) ??
+    0;
+  const cached =
+    asTokenCount(nested.cachedReadTokens) ??
+    asTokenCount(nested.cache_read_input_tokens) ??
+    0;
+  const total =
+    asTokenCount(nested.totalTokens) ??
+    asTokenCount(nested.total_tokens) ??
+    asTokenCount(nested.tokens);
+  const output =
+    asTokenCount(nested.outputTokens) ??
+    asTokenCount(nested.output_tokens) ??
+    asTokenCount(nested.completion_tokens);
+  // Prefer live context occupancy (input + cache). Fall back to totals.
+  const used =
+    input + cached > 0
+      ? input + cached
+      : (total ?? (output !== undefined ? output : 0));
   if (used <= 0 && total === undefined && output === undefined) return undefined;
-  const size =
-    fallback?.size && fallback.size > 0
-      ? fallback.size
-      : DEFAULT_CONTEXT_SIZE;
-  const cost = fallback?.cost;
+  const size = resolveSize(nested, fallback);
+  const cost = extractCost(nested) ?? fallback?.cost;
   return { used, size, ...(cost !== undefined ? { cost } : {}) };
+}
+
+/** Merge two usage snapshots — never let a zero placeholder wipe a live used count. */
+export function mergeSessionUsage(
+  current: SessionUsage | undefined,
+  incoming: SessionUsage,
+): SessionUsage {
+  const used = Math.max(incoming.used, current?.used ?? 0);
+  const size =
+    incoming.size > 0
+      ? incoming.size
+      : current?.size && current.size > 0
+        ? current.size
+        : DEFAULT_CONTEXT_SIZE;
+  const cost = incoming.cost ?? current?.cost;
+  return {
+    used: Math.min(used, size),
+    size,
+    ...(cost !== undefined ? { cost } : {}),
+  };
 }
 
 /**
@@ -250,7 +306,10 @@ export function mapAcpSessionUpdate(
     }
 
     case "usage_update": {
-      const usage = parseSessionUsage(update);
+      // Prefer strict used/size; fall back to experimental PromptResponse.usage shape
+      // when OpenCode omits size or only reports inputTokens/totalTokens.
+      const usage =
+        parseSessionUsage(update) ?? usageFromPromptResult(update);
       return {
         events: [baseEvent("session.usage", usage ?? { update })],
         timelineUpserts: [],

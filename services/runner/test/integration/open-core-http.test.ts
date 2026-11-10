@@ -126,6 +126,79 @@ describe("open-core HTTP API", () => {
     assert.match(body.error, /disabled/i);
   });
 
+  it("GET /v1/agent shows catalog while sessions are off", async () => {
+    const res = await fetch(url("/v1/agent"), { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      enabled: boolean;
+      phase: string;
+      source: string;
+      harnesses: Array<{ id: string }>;
+    };
+    assert.equal(body.enabled, false);
+    assert.equal(body.phase, "disabled");
+    assert.equal(body.source, "none");
+    assert.ok(body.harnesses.some((h) => h.id === "cursor"));
+  });
+
+  it("PUT /v1/agent can select a harness without enabling ACP", async () => {
+    const res = await fetch(url("/v1/agent"), {
+      method: "PUT",
+      headers: {
+        ...authHeaders(),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        enabled: false,
+        harness: "claude",
+        apiKey: "sk-ant-integration",
+      }),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      enabled: boolean;
+      harness: string;
+      hasApiKey: boolean;
+      phase: string;
+    };
+    assert.equal(body.enabled, false);
+    assert.equal(body.harness, "claude");
+    assert.equal(body.hasApiKey, true);
+    assert.equal(body.phase, "disabled");
+
+    const status = await fetch(url("/v1/status"), { headers: authHeaders() });
+    assert.equal(status.status, 200);
+    const statusBody = (await status.json()) as {
+      sessionsEnabled: boolean;
+      agentConfigured: boolean;
+      agentHarness?: string;
+    };
+    assert.equal(statusBody.sessionsEnabled, false);
+    assert.equal(statusBody.agentConfigured, false);
+    assert.equal(statusBody.agentHarness, undefined);
+  });
+
+  it("PUT /v1/agent switches harness id while disabled", async () => {
+    const res = await fetch(url("/v1/agent"), {
+      method: "PUT",
+      headers: {
+        ...authHeaders(),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        enabled: false,
+        harness: "codex",
+      }),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      harness: string;
+      hasApiKey: boolean;
+    };
+    assert.equal(body.harness, "codex");
+    assert.equal(body.hasApiKey, true);
+  });
+
   it("GET /v1/workspaces lists the primary workspace", async () => {
     const res = await fetch(url("/v1/workspaces"), { headers: authHeaders() });
     assert.equal(res.status, 200);

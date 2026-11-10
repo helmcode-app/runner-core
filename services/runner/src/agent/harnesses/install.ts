@@ -3,7 +3,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { access, constants, mkdir } from "node:fs/promises";
+import { access, constants, mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../../util/process.js";
@@ -136,4 +136,67 @@ export async function installNpmPackage(opts: {
     stdout: result.stdout,
     stderr: result.stderr,
   };
+}
+
+/**
+ * Download an official installer script, then run it with bash.
+ * Used for CLIs that are not published to npm (Cursor Agent).
+ */
+export async function installCurlScript(opts: {
+  url: string;
+  timeoutMs: number;
+  /** HOME for the installer (controls ~/.local/bin destination). */
+  home?: string;
+  cwd?: string;
+}): Promise<{ durationMs: number; stdout: string; stderr: string }> {
+  const home = opts.home?.trim() || process.env.HOME?.trim() || os.homedir();
+  const cwd = opts.cwd?.trim() || home;
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "helm-harness-install-"));
+  const scriptPath = path.join(tmp, "install.sh");
+  try {
+    const download = await runCommand(
+      "curl",
+      ["-fsSL", opts.url, "-o", scriptPath],
+      {
+        cwd,
+        timeoutMs: Math.min(opts.timeoutMs, 120_000),
+        maxOutputChars: 64 * 1024,
+        env: { HOME: home },
+      },
+    );
+    if (download.exitCode !== 0) {
+      const detail =
+        download.stderr.trim() ||
+        download.stdout.trim() ||
+        `exit ${download.exitCode}`;
+      throw new Error(`Failed to download installer ${opts.url}: ${detail}`);
+    }
+
+    const remaining = Math.max(opts.timeoutMs - download.durationMs, 30_000);
+    const result = await runCommand("bash", [scriptPath], {
+      cwd,
+      timeoutMs: remaining,
+      maxOutputChars: 256 * 1024,
+      env: {
+        HOME: home,
+        // Installer may call curl/tar; keep a usable PATH.
+        PATH: [
+          path.join(home, ".local", "bin"),
+          process.env.PATH ?? "",
+        ].join(path.delimiter),
+      },
+    });
+    if (result.exitCode !== 0) {
+      const detail =
+        result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`;
+      throw new Error(`Failed to run installer ${opts.url}: ${detail}`);
+    }
+    return {
+      durationMs: download.durationMs + result.durationMs,
+      stdout: `${download.stdout}${result.stdout}`,
+      stderr: `${download.stderr}${result.stderr}`,
+    };
+  } finally {
+    await rm(tmp, { recursive: true, force: true }).catch(() => undefined);
+  }
 }

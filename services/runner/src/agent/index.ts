@@ -1,7 +1,8 @@
 /**
  * Agent runtime: ACP Client + harness ACP Server + product gateway.
  *
- * Default harness is OpenCode (`AGENT_HARNESS=opencode` → `opencode acp`).
+ * Selection lives in `$WORKSPACES_PATH/.setup/agent.json` (client PUT /v1/agent).
+ * Env `SESSIONS_ENABLED` / `AGENT_*` bootstraps when no file exists.
  * Every catalog id shares the stdio supervisor.
  */
 
@@ -54,13 +55,17 @@ export {
 export {
   defaultHarnessPrefix,
   defaultOpenCodePrefix,
+  installCurlScript,
+  installNpmPackage,
   npmPackageSpec,
   resolveHarnessBinPath,
 } from "./harnesses/install.js";
 export {
   AGENT_PROVIDER_AUTH_IDS,
+  AGENT_PROVIDER_IDS,
   buildOpenCodeAuthFile,
   enabledOpenCodeProviderIds,
+  isAgentProviderId,
   materializeOpenCodeAuth,
   resolveOpenCodeAuthPath,
   resolveOpenCodeAuthProviders,
@@ -85,14 +90,28 @@ export {
 export {
   mapAcpSessionUpdate,
   mapStopReason,
+  mergeSessionUsage,
   parseSessionUsage,
   usageFromPromptResult,
 } from "./map-updates.js";
 export {
+  capabilityKeysFromConfigOptions,
+  contextLevelsFromConfigOptions,
+  contextSetConfig,
+  currentContextFromConfigOptions,
+  fastLevelsFromConfigOptions,
   fastSetConfig,
+  modelEntriesFromConfigOptions,
   modelIdsFromConfigOptions,
   modelSetConfig,
   parseConfigOptions,
+  parseContextTokens,
+  parseModelCapabilityKeys,
+  stripModelDecoration,
+  supportsFastFromConfigOptions,
+  thinkingLevelsFromConfigOptions,
+  thinkingSetConfig,
+  thinkLevelsFromConfigOptions,
   thinkLevelSetConfig,
 } from "./session-config.js";
 export { resolvePermission } from "./permissions.js";
@@ -116,6 +135,32 @@ export {
   toPersistedSession,
   type PersistedSession,
 } from "./persist.js";
+export {
+  AGENT_CONFIG_VERSION,
+  agentConfigFromEnv,
+  defaultAgentConfigPath,
+  effectiveAppConfig,
+  loadPersistedAgentConfig,
+  sanitizePersistedAgentConfig,
+  mergeAgentConfigUpdate,
+  parsePersistedAgentConfig,
+  redactApiKey,
+  savePersistedAgentConfig,
+  validateAgentConfig,
+  type AgentConfigSource,
+  type AgentConfigUpdate,
+  type PersistedAgentConfig,
+} from "./config-store.js";
+export {
+  AgentConfigError,
+  createAgentRuntimeController,
+  type AgentConfigView,
+  type AgentRuntimeController,
+  type AgentRuntimePhase,
+  type CreateAgentRuntimeControllerOptions,
+  type HarnessCatalogEntry,
+} from "./runtime-controller.js";
+export { handleAgentHttp, type AgentRouteContext } from "./routes.js";
 
 export interface AgentRuntime {
   gateway: AgentGateway;
@@ -125,8 +170,8 @@ export interface AgentRuntime {
 }
 
 /**
- * Build agent runtime when SESSIONS_ENABLED.
- * Add harnesses in `harnesses/ids.ts` + `catalog.ts`.
+ * Build a one-shot agent runtime from an already-enabled AppConfig.
+ * Prefer `createAgentRuntimeController` for product boot + harness switching.
  */
 export function createAgentRuntime(
   config: AppConfig,
@@ -161,7 +206,8 @@ export function createAgentRuntime(
     gateway,
     harness,
     async start() {
-      await harness.start();
+      // Explicit one-shot start (env/CI): allow install.
+      await harness.start({ install: true });
       await gateway.restore();
     },
     async stop() {

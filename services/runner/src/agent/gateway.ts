@@ -29,15 +29,26 @@ import {
   DEFAULT_CONTEXT_SIZE,
   mapAcpSessionUpdate,
   mapStopReason,
+  mergeSessionUsage,
   usageFromPromptResult,
 } from "./map-updates.js";
 import {
+  contextLevelsFromConfigOptions,
+  contextSetConfig,
+  currentContextFromConfigOptions,
   fastSetConfig,
-  modelIdsFromConfigOptions,
+  modelEntriesFromConfigOptions,
   modelSetConfig,
   parseConfigOptions,
+  parseContextTokens,
+  supportsFastFromConfigOptions,
+  thinkingLevelsFromConfigOptions,
+  thinkingSetConfig,
+  thinkLevelsFromConfigOptions,
   thinkLevelSetConfig,
+  stripModelDecoration,
   type HelmConfigOption,
+  type ModelSelectEntry,
   type SetConfigPayload,
 } from "./session-config.js";
 import { loadAgentModelsCatalog, type ModelsCatalog } from "./models.js";
@@ -124,8 +135,38 @@ export class AgentGateway {
       kind: TimelineEntry["kind"];
     }
   >();
-  /** Harness-advertised `provider/model` ids from ACP configOptions. */
-  private discoveredModels: string[] = [];
+  /** Harness-advertised models from ACP configOptions (cleaned ids/names). */
+  private discoveredModels: ModelSelectEntry[] = [];
+  /** Effort / reasoning levels the harness accepts. */
+  private discoveredThinkLevels: string[] = [];
+  /** Thinking on/off values when advertised. */
+  private discoveredThinkingLevels: string[] = [];
+  /** Context window sizes when advertised. */
+  private discoveredContextLevels: string[] = [];
+  /** Current context selection when known. */
+  private discoveredContext: string | undefined;
+  /** Whether the harness advertises a fast option. */
+  private discoveredSupportsFast = false;
+  /**
+   * Per-model caps from Cursor `list_available_models`. Effort/fast/context
+   * differ by model — never apply another model's empty set over a richer one.
+   */
+  private cursorModelCaps = new Map<
+    string,
+    {
+      thinkLevels: string[];
+      thinkingLevels: string[];
+      contextLevels: string[];
+      context?: string;
+      supportsFast: boolean;
+    }
+  >();
+  /** Last model whose caps are currently published on the catalog. */
+  private lastCapabilityModelId: string | undefined;
+  /** Serialize catalog probes so concurrent refreshes cannot thrash caps. */
+  private modelsRequestTail: Promise<unknown> = Promise.resolve();
+  /** Freshness of the last successful `cursor/list_available_models`. */
+  private cursorCatalogAt = 0;
   private readonly store: SessionStore;
 
   constructor(
@@ -183,24 +224,55 @@ export class AgentGateway {
     const record = this.sessions.get(helmId);
     if (!record) return;
 
+    const updateKind =
+      typeof params.update.sessionUpdate === "string"
+        ? params.update.sessionUpdate
+        : "unknown";
+    // Usage / config are sparse and product-critical — always leave a breadcrumb.
+    if (
+      updateKind === "usage_update" ||
+      updateKind === "config_option_update" ||
+      updateKind === "current_mode_update"
+    ) {
+      this.logger.info("acp session update", {
+        sessionId: helmId,
+        kind: updateKind,
+        keys: Object.keys(params.update),
+        update: params.update,
+      });
+    } else {
+      this.logger.debug("acp session update", {
+        sessionId: helmId,
+        kind: updateKind,
+        keys: Object.keys(params.update),
+      });
+    }
+
     const mapped = mapAcpSessionUpdate(params, { helmSessionId: helmId });
     if (mapped.status) {
       record.status = mapped.status;
       record.updatedAt = new Date().toISOString();
     }
     if (mapped.usage) {
-      record.usage = mapped.usage;
+      record.usage = mergeSessionUsage(record.usage, mapped.usage);
       record.updatedAt = new Date().toISOString();
       this.logger.info("session usage", {
         sessionId: helmId,
-        used: mapped.usage.used,
-        size: mapped.usage.size,
-        cost: mapped.usage.cost,
+        used: record.usage.used,
+        size: record.usage.size,
+        cost: record.usage.cost,
+      });
+    } else if (updateKind === "usage_update") {
+      this.logger.warn("acp usage_update not mapped", {
+        sessionId: helmId,
+        update: params.update,
       });
     }
     if (mapped.configOptions && mapped.configOptions.length > 0) {
       record.configOptions = mapped.configOptions;
       this.rememberDiscoveredModels(mapped.configOptions);
+      this.syncUsageSizeFromContext(record);
+      this.emitCapabilities(helmId);
     }
 
     for (const entry of mapped.timelineUpserts) {
@@ -241,12 +313,50 @@ export class AgentGateway {
     }
   }
 
-  async models(forceRefresh = false): Promise<ModelsCatalog> {
-    const discovered = await this.discoverHarnessModels(forceRefresh);
-    return loadAgentModelsCatalog(this.config, {
+  async models(
+    forceRefresh = false,
+    probeModel?: string,
+  ): Promise<ModelsCatalog> {
+    const run = this.modelsRequestTail.then(() =>
+      this.modelsUnlocked(forceRefresh, probeModel),
+    );
+    // Keep the queue alive even when a probe fails.
+    this.modelsRequestTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async modelsUnlocked(
+    forceRefresh = false,
+    probeModel?: string,
+  ): Promise<ModelsCatalog> {
+    const probe =
+      probeModel?.trim() || this.lastCapabilityModelId || undefined;
+    if (probe) {
+      const fromCursor = await this.discoverCursorParameterizedCatalog(
+        probe,
+        forceRefresh,
+      );
+      if (!fromCursor) {
+        await this.probeModelCapabilities(probe);
+      }
+    } else {
+      await this.discoverHarnessCapabilities(forceRefresh);
+    }
+    const catalogOpts: Parameters<typeof loadAgentModelsCatalog>[1] = {
       forceRefresh,
-      discoveredModels: discovered,
-    });
+      discoveredModels: this.discoveredModels,
+      thinkLevels: this.discoveredThinkLevels,
+      thinkingLevels: this.discoveredThinkingLevels,
+      contextLevels: this.discoveredContextLevels,
+      supportsFast: this.discoveredSupportsFast,
+    };
+    if (this.discoveredContext) {
+      catalogOpts.context = this.discoveredContext;
+    }
+    return loadAgentModelsCatalog(this.config, catalogOpts);
   }
 
   async createSession(input?: {
@@ -431,12 +541,28 @@ export class AgentGateway {
         if (model) helm.model = model;
         const thinkLevel = body.thinkLevel?.trim();
         if (thinkLevel) helm.thinkLevel = thinkLevel;
+        if (body.thinking !== undefined && body.thinking !== null) {
+          helm.thinking = body.thinking;
+        }
+        const context = body.context?.trim();
+        if (context) helm.context = context;
         if (typeof body.fast === "boolean") helm.fast = body.fast;
         const result = (await conn.request(acp.methods.agent.session.prompt, {
           sessionId: record.acpSessionId,
           prompt: content,
           _meta: { helm },
-        })) as { stopReason?: string; usage?: Record<string, unknown> };
+        })) as { stopReason?: string; usage?: Record<string, unknown> } &
+          Record<string, unknown>;
+        this.logger.info("acp prompt result", {
+          sessionId: helmId,
+          stopReason: result.stopReason,
+          keys: Object.keys(result),
+          hasUsage: result.usage != null,
+          usage:
+            result.usage && typeof result.usage === "object"
+              ? result.usage
+              : undefined,
+        });
         this.applyPromptUsage(record, result);
         this.finalizeTurn(record, mapStopReason(result.stopReason));
         this.emit({
@@ -853,12 +979,14 @@ export class AgentGateway {
     record: GatewaySessionRecord,
     body: PromptRequest,
   ): Promise<void> {
-    const payloads: SetConfigPayload[] = [];
+    // Cursor (and similar) advertise effort/fast/context only after the model
+    // is selected — set model first, then the dependent knobs.
     const modelId = body.model?.trim();
     if (modelId) {
       const payload = modelSetConfig(record.configOptions, modelId);
-      if (payload) payloads.push(payload);
-      else {
+      if (payload) {
+        await this.applyConfigPayload(record, payload);
+      } else {
         this.logger.info("session model config unmatched", {
           sessionId: record.helmId,
           model: modelId,
@@ -866,10 +994,12 @@ export class AgentGateway {
         });
       }
     }
+
+    const followUps: SetConfigPayload[] = [];
     const thinkLevel = body.thinkLevel?.trim();
     if (thinkLevel) {
       const payload = thinkLevelSetConfig(record.configOptions, thinkLevel);
-      if (payload) payloads.push(payload);
+      if (payload) followUps.push(payload);
       else {
         this.logger.info("session thinkLevel config unmatched", {
           sessionId: record.helmId,
@@ -878,90 +1008,444 @@ export class AgentGateway {
         });
       }
     }
-    if (typeof body.fast === "boolean") {
-      const payload = fastSetConfig(record.configOptions, body.fast);
-      if (payload) payloads.push(payload);
+    if (
+      body.thinking !== undefined &&
+      body.thinking !== null &&
+      body.thinking !== ""
+    ) {
+      const payload = thinkingSetConfig(record.configOptions, body.thinking);
+      if (payload) followUps.push(payload);
     }
-    if (payloads.length === 0) return;
-    const conn = this.getConnection();
-    for (const payload of payloads) {
-      try {
-        await conn.request(acp.methods.agent.session.setConfigOption, {
-          sessionId: record.acpSessionId,
-          ...payload,
-        });
-      } catch (err) {
-        this.logger.debug("session setConfigOption skipped", {
-          configId: payload.configId,
-          error: err instanceof Error ? err.message : String(err),
+    const context = body.context?.trim();
+    if (context) {
+      const payload = contextSetConfig(record.configOptions, context);
+      if (payload) followUps.push(payload);
+      else {
+        this.logger.info("session context config unmatched", {
+          sessionId: record.helmId,
+          context,
+          optionIds: record.configOptions.map((o) => o.id),
         });
       }
+    }
+    if (typeof body.fast === "boolean") {
+      const payload = fastSetConfig(record.configOptions, body.fast);
+      if (payload) followUps.push(payload);
+    }
+    for (const payload of followUps) {
+      await this.applyConfigPayload(record, payload);
+    }
+  }
+
+  private async applyConfigPayload(
+    record: GatewaySessionRecord,
+    payload: SetConfigPayload,
+  ): Promise<void> {
+    try {
+      const result = (await this.getConnection().request(
+        acp.methods.agent.session.setConfigOption,
+        {
+          sessionId: record.acpSessionId,
+          ...payload,
+        },
+      )) as { configOptions?: unknown };
+      if (result?.configOptions) {
+        const options = parseConfigOptions(result.configOptions);
+        if (options.length > 0) {
+          record.configOptions = options;
+          this.applyDiscoveredCapabilities(options);
+          this.syncUsageSizeFromContext(record);
+          this.emitCapabilities(record.helmId);
+        }
+      }
+    } catch (err) {
+      this.logger.debug("session setConfigOption skipped", {
+        configId: payload.configId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
   private applyPromptUsage(
     record: GatewaySessionRecord,
-    result: { usage?: Record<string, unknown> },
+    result: { usage?: Record<string, unknown> } & Record<string, unknown>,
   ): void {
-    if (!result.usage) return;
-    const next = usageFromPromptResult({ usage: result.usage }, record.usage);
-    if (!next) return;
-    const current = record.usage;
-    if (current && current.used > 0) return;
-    record.usage = next;
+    // Prefer nested `usage`; also accept top-level token fields from experimental agents.
+    const next =
+      (result.usage
+        ? usageFromPromptResult({ usage: result.usage }, record.usage)
+        : undefined) ?? usageFromPromptResult(result, record.usage);
+    if (!next) {
+      this.logger.info("acp prompt usage missing", {
+        sessionId: record.helmId,
+        keys: Object.keys(result),
+        currentUsed: record.usage?.used ?? 0,
+        currentSize: record.usage?.size ?? 0,
+      });
+      return;
+    }
+    const merged = mergeSessionUsage(record.usage, next);
+    const previous = record.usage;
+    if (
+      previous &&
+      previous.used === merged.used &&
+      previous.size === merged.size &&
+      JSON.stringify(previous.cost) === JSON.stringify(merged.cost)
+    ) {
+      return;
+    }
+    record.usage = merged;
     record.updatedAt = new Date().toISOString();
     this.emit({
       type: "session.usage",
       at: record.updatedAt,
       sessionId: record.helmId,
-      data: next,
+      data: merged,
     });
     this.logger.info("session usage from prompt result", {
       sessionId: record.helmId,
-      used: next.used,
-      size: next.size,
+      used: merged.used,
+      size: merged.size,
     });
   }
 
   private rememberDiscoveredModels(options: HelmConfigOption[]): void {
-    const ids = modelIdsFromConfigOptions(options);
-    if (ids.length === 0) return;
-    this.discoveredModels = ids;
+    this.applyDiscoveredCapabilities(options);
   }
 
-  private async discoverHarnessModels(
-    forceRefresh: boolean,
-  ): Promise<string[]> {
-    if (!forceRefresh && this.discoveredModels.length > 0) {
-      return this.discoveredModels;
-    }
-    const fromSessions: string[] = [];
-    const seen = new Set<string>();
-    for (const record of this.sessions.values()) {
-      for (const id of modelIdsFromConfigOptions(record.configOptions)) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        fromSessions.push(id);
+  private capsFromOptions(options: HelmConfigOption[]): {
+    thinkLevels: string[];
+    thinkingLevels: string[];
+    contextLevels: string[];
+    context?: string;
+    supportsFast: boolean;
+  } {
+    const context = currentContextFromConfigOptions(options);
+    return {
+      thinkLevels: thinkLevelsFromConfigOptions(options),
+      thinkingLevels: thinkingLevelsFromConfigOptions(options),
+      contextLevels: contextLevelsFromConfigOptions(options),
+      ...(context ? { context } : {}),
+      supportsFast: supportsFastFromConfigOptions(options),
+    };
+  }
+
+  private capsNonEmpty(caps: {
+    thinkLevels: string[];
+    thinkingLevels: string[];
+    contextLevels: string[];
+    supportsFast: boolean;
+  }): boolean {
+    return (
+      caps.thinkLevels.length > 0 ||
+      caps.thinkingLevels.length > 0 ||
+      caps.contextLevels.length > 0 ||
+      caps.supportsFast
+    );
+  }
+
+  private applyCaps(caps: {
+    thinkLevels: string[];
+    thinkingLevels: string[];
+    contextLevels: string[];
+    context?: string;
+    supportsFast: boolean;
+  }): void {
+    this.discoveredThinkLevels = caps.thinkLevels;
+    this.discoveredThinkingLevels = caps.thinkingLevels;
+    this.discoveredContextLevels = caps.contextLevels;
+    this.discoveredContext = caps.context;
+    this.discoveredSupportsFast = caps.supportsFast;
+  }
+
+  private rememberCursorModelCaps(
+    modelId: string,
+    options: HelmConfigOption[],
+  ): void {
+    const id = stripModelDecoration(modelId);
+    if (!id) return;
+    const next = this.capsFromOptions(options);
+    const prev = this.cursorModelCaps.get(id);
+    // Keep a richer prior entry when Cursor returns an empty options blob.
+    if (prev && this.capsNonEmpty(prev) && !this.capsNonEmpty(next)) return;
+    this.cursorModelCaps.set(id, next);
+  }
+
+  private publishCapsForModel(modelId: string | undefined): void {
+    const id = modelId ? stripModelDecoration(modelId) : "";
+    if (id) {
+      const caps = this.cursorModelCaps.get(id);
+      if (caps) {
+        this.applyCaps(caps);
+        this.lastCapabilityModelId = id;
+        return;
       }
     }
-    if (!forceRefresh && fromSessions.length > 0) {
-      this.discoveredModels = fromSessions;
-      return fromSessions;
+    if (
+      this.lastCapabilityModelId &&
+      this.cursorModelCaps.has(this.lastCapabilityModelId)
+    ) {
+      this.applyCaps(this.cursorModelCaps.get(this.lastCapabilityModelId)!);
     }
+  }
+
+  private applyDiscoveredCapabilities(options: HelmConfigOption[]): void {
+    const entries = modelEntriesFromConfigOptions(options);
+    if (entries.length > 0) this.discoveredModels = entries;
+    this.applyCaps(this.capsFromOptions(options));
+  }
+
+  private hasModelDependentCaps(): boolean {
+    return (
+      this.discoveredThinkLevels.length > 0 ||
+      this.discoveredThinkingLevels.length > 0 ||
+      this.discoveredContextLevels.length > 0 ||
+      this.discoveredSupportsFast
+    );
+  }
+
+  private emitCapabilities(sessionId: string): void {
+    this.emit({
+      type: "session.config",
+      at: new Date().toISOString(),
+      sessionId,
+      data: {
+        thinkLevels: this.discoveredThinkLevels,
+        thinkingLevels: this.discoveredThinkingLevels,
+        contextLevels: this.discoveredContextLevels,
+        ...(this.discoveredContext
+          ? { context: this.discoveredContext }
+          : {}),
+        supportsFast: this.discoveredSupportsFast,
+      },
+    });
+  }
+
+  private syncUsageSizeFromContext(record: GatewaySessionRecord): void {
+    const label = this.discoveredContext;
+    if (!label) return;
+    const size = parseContextTokens(label);
+    if (size === undefined) return;
+    const used = record.usage?.used ?? 0;
+    const cost = record.usage?.cost;
+    if (record.usage?.size === size) return;
+    record.usage = {
+      used: Math.min(used, size),
+      size,
+      ...(cost ? { cost } : {}),
+    };
+    record.updatedAt = new Date().toISOString();
+    this.emit({
+      type: "session.usage",
+      at: record.updatedAt,
+      sessionId: record.helmId,
+      data: record.usage,
+    });
+  }
+
+  /**
+   * Select a model so Cursor-style harnesses advertise effort/fast/context for
+   * that model, then cache the resulting capability lists.
+   */
+  private async probeModelCapabilities(modelId: string): Promise<void> {
+    const id = stripModelDecoration(modelId);
+    // Prefer cached Cursor caps — avoids session/setConfigOption thrash.
+    if (id && this.cursorModelCaps.has(id)) {
+      this.publishCapsForModel(id);
+      return;
+    }
+
+    for (const record of this.sessions.values()) {
+      if (record.configOptions.length === 0 || !record.acpSessionId) continue;
+      const payload = modelSetConfig(record.configOptions, modelId);
+      if (!payload) continue;
+      await this.applyConfigPayload(record, payload);
+      this.rememberCursorModelCaps(id || modelId, record.configOptions);
+      this.publishCapsForModel(id || modelId);
+      if (this.discoveredModels.length === 0) {
+        this.applyDiscoveredCapabilities(record.configOptions);
+      }
+      return;
+    }
+
     try {
       const opened = await this.openAcpSession(this.resolveSessionCwd());
-      const ids = modelIdsFromConfigOptions(opened.configOptions);
+      this.applyDiscoveredCapabilities(opened.configOptions);
+      const payload = modelSetConfig(opened.configOptions, modelId);
+      if (payload) {
+        const result = (await this.getConnection().request(
+          acp.methods.agent.session.setConfigOption,
+          {
+            sessionId: opened.acpSessionId,
+            ...payload,
+          },
+        )) as { configOptions?: unknown };
+        const options = parseConfigOptions(result?.configOptions);
+        if (options.length > 0) {
+          this.rememberCursorModelCaps(id || modelId, options);
+          this.publishCapsForModel(id || modelId);
+          // Preserve model list if already discovered.
+          if (this.discoveredModels.length === 0) {
+            this.applyDiscoveredCapabilities(options);
+          }
+        }
+      }
       await this.closeAcpSession(opened.acpSessionId);
-      if (ids.length > 0) this.discoveredModels = ids;
-      this.logger.info("discovered harness models", { count: ids.length });
-      return this.discoveredModels;
+      this.logger.info("probed model capabilities", {
+        model: modelId,
+        thinkLevels: this.discoveredThinkLevels.length,
+        thinkingLevels: this.discoveredThinkingLevels.length,
+        contextLevels: this.discoveredContextLevels.length,
+        supportsFast: this.discoveredSupportsFast,
+      });
     } catch (err) {
-      this.logger.debug("harness model discovery skipped", {
+      this.logger.debug("model capability probe skipped", {
+        model: modelId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return this.discoveredModels.length > 0
-        ? this.discoveredModels
-        : fromSessions;
+    }
+  }
+
+  /**
+   * Cursor extension: bare model ids + per-model configOptions.
+   * Prefer this over compound `model[fast=true]` session/new lists.
+   */
+  private async discoverCursorParameterizedCatalog(
+    probeModel?: string,
+    forceRefresh = false,
+  ): Promise<boolean> {
+    const probeId = stripModelDecoration(probeModel ?? "") || undefined;
+    const cacheFresh =
+      !forceRefresh &&
+      this.discoveredModels.length > 0 &&
+      this.cursorModelCaps.size > 0 &&
+      Date.now() - this.cursorCatalogAt < 30_000;
+    if (cacheFresh) {
+      this.publishCapsForModel(probeId ?? this.lastCapabilityModelId);
+      return true;
+    }
+
+    try {
+      const result = (await this.getConnection().request(
+        "cursor/list_available_models",
+        { _meta: { parameterizedModelPicker: true } },
+      )) as {
+        models?: Array<{
+          value?: string;
+          name?: string;
+          configOptions?: unknown;
+        }>;
+      };
+      const rows = Array.isArray(result?.models) ? result.models : [];
+      if (rows.length === 0) return false;
+
+      const entries: ModelSelectEntry[] = [];
+      for (const row of rows) {
+        const id = stripModelDecoration(String(row.value ?? "").trim());
+        if (!id) continue;
+        const name = stripModelDecoration(String(row.name ?? id).trim()) || id;
+        entries.push({
+          id,
+          wireValue: id,
+          name,
+          capabilityKeys: [],
+        });
+        this.rememberCursorModelCaps(id, parseConfigOptions(row.configOptions));
+      }
+      if (entries.length === 0) return false;
+
+      this.discoveredModels = entries;
+      this.cursorCatalogAt = Date.now();
+      const fallbackId =
+        this.lastCapabilityModelId &&
+        entries.some((e) => e.id === this.lastCapabilityModelId)
+          ? this.lastCapabilityModelId
+          : entries.find((e) => {
+              const caps = this.cursorModelCaps.get(e.id);
+              return caps ? this.capsNonEmpty(caps) : false;
+            })?.id ||
+            entries.find((e) => e.id !== "default")?.id ||
+            entries[0]?.id;
+      this.publishCapsForModel(probeId ?? fallbackId);
+      this.logger.info("cursor parameterized catalog", {
+        models: entries.length,
+        probe: probeId ?? fallbackId ?? "-",
+        thinkLevels: this.discoveredThinkLevels.length,
+        thinkingLevels: this.discoveredThinkingLevels.length,
+        contextLevels: this.discoveredContextLevels.length,
+        supportsFast: this.discoveredSupportsFast,
+      });
+      return true;
+    } catch (err) {
+      this.logger.debug("cursor/list_available_models unavailable", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  private async discoverHarnessCapabilities(
+    forceRefresh: boolean,
+  ): Promise<void> {
+    if (
+      !forceRefresh &&
+      (this.discoveredModels.length > 0 || this.hasModelDependentCaps())
+    ) {
+      return;
+    }
+
+    if (await this.discoverCursorParameterizedCatalog(undefined, forceRefresh)) {
+      return;
+    }
+
+    for (const record of this.sessions.values()) {
+      if (record.configOptions.length === 0) continue;
+      this.applyDiscoveredCapabilities(record.configOptions);
+      if (
+        this.discoveredModels.length > 0 &&
+        (this.hasModelDependentCaps() || !forceRefresh)
+      ) {
+        if (!this.hasModelDependentCaps() && this.discoveredModels[0]) {
+          await this.probeModelCapabilities(this.discoveredModels[0].id);
+        }
+        return;
+      }
+    }
+
+    try {
+      const opened = await this.openAcpSession(this.resolveSessionCwd());
+      this.applyDiscoveredCapabilities(opened.configOptions);
+      if (!this.hasModelDependentCaps() && this.discoveredModels[0]) {
+        const payload = modelSetConfig(
+          opened.configOptions,
+          this.discoveredModels[0].id,
+        );
+        if (payload) {
+          const result = (await this.getConnection().request(
+            acp.methods.agent.session.setConfigOption,
+            {
+              sessionId: opened.acpSessionId,
+              ...payload,
+            },
+          )) as { configOptions?: unknown };
+          const options = parseConfigOptions(result?.configOptions);
+          if (options.length > 0) {
+            this.applyDiscoveredCapabilities(options);
+          }
+        }
+      }
+      await this.closeAcpSession(opened.acpSessionId);
+      this.logger.info("discovered harness capabilities", {
+        models: this.discoveredModels.length,
+        thinkLevels: this.discoveredThinkLevels.length,
+        thinkingLevels: this.discoveredThinkingLevels.length,
+        contextLevels: this.discoveredContextLevels.length,
+        supportsFast: this.discoveredSupportsFast,
+      });
+    } catch (err) {
+      this.logger.debug("harness capability discovery skipped", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

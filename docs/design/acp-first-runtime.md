@@ -19,10 +19,10 @@ VFS / git / terminal stay runner siblings. Agents may later attach the same back
 iPad ── /v1/sessions/* ──► Agent Gateway (ACP Client)
                               │  stdio ndjson
                               ▼
-                         harness ACP     ← AGENT_HARNESS=opencode|claude|codex|cursor|grok
+                         harness ACP     ← /v1/agent harness=opencode|claude|codex|cursor|grok
                               │
                               ▼
-                         LLM (OpenCode: AGENT_PROVIDER + key; others: AGENT_API_KEY)
+                         LLM (OpenCode: provider + key; others: apiKey)
 
          /v1/workspaces → catalog (`default` = MAIN_REPO_PATH)
          /v1/vfs*?workspaceId=  → helm-vfs (one process per workspace)
@@ -42,7 +42,10 @@ iPad ── /v1/sessions/* ──► Agent Gateway (ACP Client)
 | `acp/connection.ts` | ACP initialize + permission + `session/update` |
 | `map-updates.ts` | ACP updates → Helm timeline / SSE |
 | `settings.ts` | Product overlays (permission, extra models, cwd) |
-| `harnesses/create.ts` | `AGENT_HARNESS` → stdio supervisor |
+| `runtime-controller.ts` | Load/save agent.json; start / stop / switch harness |
+| `config-store.ts` | Persisted agent selection |
+| `routes.ts` | `GET/PUT/DELETE /v1/agent` |
+| `harnesses/create.ts` | harness id → stdio supervisor |
 | `harnesses/catalog.ts` | Specs: provider policy, spawn, auth kind |
 | `harnesses/stdio.ts` | Shared install + `spawn` + ACP connect |
 | `harnesses/stdio-settings.ts` | Install overlays (`OPENCODE_HARNESS_OVERLAY`, …) |
@@ -58,26 +61,34 @@ no new process file. No new `/v1` routes.
 
 ## Configuration
 
-Env is selection + secrets only:
+Product path: client `PUT /v1/agent` → `$WORKSPACES_PATH/.setup/agent.json` →
+`AgentRuntimeController` installs (if needed) and starts / switches the harness.
+Runner boots with ACP off and **never** downloads a harness on cold start;
+restart only resumes an already-installed binary when the file says enabled.
 
 ```bash
+# Preferred (after device auth)
+PUT /v1/agent  {"enabled":true,"harness":"claude","apiKey":"…"}
+
+# Optional bootstrap when agent.json is missing
 SESSIONS_ENABLED=true
-AGENT_HARNESS=opencode          # or claude / codex / cursor / grok
-AGENT_PROVIDER=opencode-go      # only for multi-provider shells
+AGENT_HARNESS=opencode
+AGENT_PROVIDER=opencode-go
 AGENT_API_KEY=…
 AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
 ```
 
-| Env | Meaning |
+| Source | Meaning |
 | ----- | --------- |
-| `AGENT_HARNESS` | Which ACP Server process to spawn |
-| `AGENT_PROVIDER` | LLM vendor **inside** OpenCode (later pi / goose). Unused for single-vendor harnesses |
-| `AGENT_API_KEY` | Key for that harness |
-| `AGENT_DEFAULT_MODEL` | Default `provider/model` on prompt |
+| `/v1/agent` `harness` | Which ACP Server process to spawn |
+| `/v1/agent` `provider` | LLM vendor **inside** OpenCode. Unused for single-vendor harnesses |
+| `/v1/agent` `apiKey` | Key for that harness (stored in agent.json) |
+| `/v1/agent` `defaultModel` | Default `provider/model` on prompt |
 
 Install paths, version, update interval, ACP mode ids: `harnesses/catalog.ts`
 plus overlays (`OPENCODE_HARNESS_OVERLAY`, `CLAUDE_HARNESS_OVERLAY`, …).
 Permission / extra models / cwd: `agent/settings.ts` (`AGENT_SETTINGS_OVERLAY`).
+Controller: `agent/runtime-controller.ts`.
 
 ---
 

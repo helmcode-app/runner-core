@@ -36,6 +36,7 @@ src/
 | Path | Protocol |
 | ------ | ---------- |
 | `/health`, `/v1/status` | HTTP |
+| `/v1/agent` | Select / switch ACP harness + API key |
 | `/v1/sessions/*` | Agent sessions (HTTP + SSE) |
 | `/v1/vfs` | WebSocket JSON-RPC |
 | `/v1/terminal` | WebSocket binary + control JSON |
@@ -47,7 +48,7 @@ Auth: per-device Bearer (setup code → enroll) or Upgrade `?ticket=`.
 | Credential | Purpose |
 |------------|---------|
 | Pairing Bearer | HTTP + WebSockets (generated at setup, not env) |
-| `SESSIONS_ENABLED` / `AGENT_*` | Sessions: harness + LLM auth (install knobs in `agent/harnesses/catalog.ts` + overlays) |
+| `SESSIONS_ENABLED` / `AGENT_*` | Optional bootstrap when `agent.json` missing; product path is `PUT /v1/agent` |
 
 ## Develop
 

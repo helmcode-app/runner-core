@@ -107,11 +107,11 @@ LLM
 | `REVIEW_SETUP_CODE` | Optional non-expiring reusable enroll code for App Review / demos (`XXXX-XXXX`) |
 | `SESSIONS_ENABLED` | Optional bootstrap when `agent.json` missing (product: `PUT /v1/agent`) |
 | `AGENT_HARNESS` | Bootstrap ACP Server id when env-enabled: `opencode`, `claude`, `codex`, `cursor`, `grok` |
-| `AGENT_PROVIDER` | Inside OpenCode: `opencode-go` (aliases `opencode` / `opencode-go-plus` / `opencode-zen`). Unused for claude/codex/cursor/grok |
 | `AGENT_API_KEY` | OpenCode Go key (also unlocks free `opencode/*` models) / single-vendor harness keys |
 | `AGENT_DEFAULT_MODEL` | Default `provider/model` when prompt omits `model` (e.g. `opencode/beam-free`) |
+| `AGENT_PROVIDER` | Legacy/optional. OpenCode always uses `opencode-go` when unset |
 
-OpenCode sessions need `AGENT_PROVIDER=opencode-go` + `AGENT_API_KEY`. Single-vendor harnesses need `AGENT_API_KEY` only.
+OpenCode sessions need `AGENT_HARNESS=opencode` + `AGENT_API_KEY` only. Single-vendor harnesses need `AGENT_API_KEY` only.
 Install / permission / extra-model knobs are code overlays, not env. See [docs/api/harnesses.md](./docs/api/harnesses.md).
 
 ## Test Agent Sessions
@@ -122,9 +122,8 @@ Install / permission / extra-model knobs are code overlays, not env. See [docs/a
 export HOST_REPO=/absolute/path/to/your/git/repo
 export SESSIONS_ENABLED=true
 export AGENT_HARNESS=opencode
-export AGENT_PROVIDER=opencode-go
 export AGENT_API_KEY=oc-…
-export AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
+export AGENT_DEFAULT_MODEL=opencode/beam-free
 
 docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 ```
@@ -134,9 +133,8 @@ Local process (same keys):
 ```bash
 export SESSIONS_ENABLED=true
 export AGENT_HARNESS=opencode
-export AGENT_PROVIDER=opencode-go
 export AGENT_API_KEY=oc-…
-export AGENT_DEFAULT_MODEL=opencode-go/glm-5.1
+export AGENT_DEFAULT_MODEL=opencode/beam-free
 npm start
 ```
 

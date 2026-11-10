@@ -70,8 +70,9 @@ const envSchema = z.object({
   */
  AGENT_HARNESS: z.enum(AGENT_HARNESS_IDS).default("opencode"),
  /**
-  * Bootstrap LLM vendor inside OpenCode when no agent.json.
-  * Unused for single-vendor harnesses.
+  * Optional OpenCode vendor override. When unset and AGENT_HARNESS=opencode,
+  * defaults to `opencode-go` (the only OpenCode provider). Unused for
+  * claude/codex/cursor/grok.
   */
  AGENT_PROVIDER: agentProviderSchema.optional(),
  /**
@@ -130,9 +131,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
  }
 
  const providerRaw = data.AGENT_PROVIDER;
- const provider = providerRaw
+ let provider = providerRaw
   ? normalizeAgentProviderId(providerRaw) ?? undefined
   : undefined;
+ // OpenCode only has one Helm provider now — default so env/bootstrap
+ // does not need AGENT_PROVIDER.
+ if (!provider && data.AGENT_HARNESS === "opencode") {
+  provider = "opencode-go";
+ }
 
  return {
   ...data,

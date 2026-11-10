@@ -78,18 +78,14 @@ export function resolveOpenCodeAuthProviders(
   const raw = config.AGENT_PROVIDER;
   const key = config.AGENT_API_KEY?.trim();
   if (!raw && !key) return [];
-  if (!raw) {
-    throw new Error(
-      "AGENT_PROVIDER is required when AGENT_API_KEY is set (use opencode-go)",
-    );
-  }
-  const provider = normalizeAgentProviderId(raw);
+  // Key alone is enough — OpenCode's only Helm provider is opencode-go.
+  const provider = normalizeAgentProviderId(raw ?? "opencode-go");
   if (!provider) {
     throw new Error(`Unsupported AGENT_PROVIDER: ${raw}`);
   }
   if (!key) {
     throw new Error(
-      `AGENT_API_KEY is required when AGENT_PROVIDER=${provider}`,
+      `AGENT_API_KEY is required when AGENT_HARNESS=opencode`,
     );
   }
   return [{ providerId: AGENT_PROVIDER_AUTH_IDS[provider], key }];
@@ -110,7 +106,7 @@ export function buildOpenCodeAuthFile(
   slots: OpenCodeAuthProviderSlot[],
 ): OpenCodeAuthFile {
   if (slots.length === 0) {
-    throw new Error("AGENT_PROVIDER and AGENT_API_KEY are required");
+    throw new Error("AGENT_API_KEY is required for OpenCode auth.json");
   }
   const file: OpenCodeAuthFile = {};
   for (const slot of slots) {
@@ -154,7 +150,7 @@ export async function materializeOpenCodeAuth(
   const slots = resolveOpenCodeAuthProviders(config);
   if (slots.length === 0) {
     throw new Error(
-      "AGENT_PROVIDER=opencode-go and AGENT_API_KEY are required when AGENT_HARNESS=opencode",
+      "AGENT_API_KEY is required when AGENT_HARNESS=opencode",
     );
   }
 

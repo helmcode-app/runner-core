@@ -97,7 +97,6 @@ Agent sessions (optional — needs network for the managed harness install):
 docker compose run --rm \
   -e SESSIONS_ENABLED=true \
   -e AGENT_HARNESS=opencode \
-  -e AGENT_PROVIDER=opencode-go \
   -e AGENT_API_KEY=oc-… \
   -p 18080:8080 smoke
 

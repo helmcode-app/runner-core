@@ -53,7 +53,13 @@ describe("loadConfig", () => {
     });
     assert.equal(cfg.AGENT_DEFAULT_MODEL, undefined);
     assert.equal(cfg.AGENT_API_KEY, undefined);
-    assert.equal(cfg.AGENT_PROVIDER, undefined);
+    // OpenCode harness defaults provider to opencode-go even when unset.
+    assert.equal(cfg.AGENT_PROVIDER, "opencode-go");
+  });
+
+  it("defaults AGENT_PROVIDER for OpenCode without requiring env", () => {
+    const cfg = loadConfig({ AGENT_HARNESS: "opencode", AGENT_API_KEY: "k" });
+    assert.equal(cfg.AGENT_PROVIDER, "opencode-go");
   });
 
   it("parses AGENT_PROVIDER + AGENT_API_KEY", () => {

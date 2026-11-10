@@ -46,22 +46,12 @@ describe("agent config store", () => {
     );
   });
 
-  it("requires provider when enabling OpenCode", () => {
+  it("requires apiKey when enabling OpenCode (provider defaults)", () => {
     assert.match(
       validateAgentConfig({
         version: 1,
         enabled: true,
         harness: "opencode",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      }) ?? "",
-      /provider/i,
-    );
-    assert.match(
-      validateAgentConfig({
-        version: 1,
-        enabled: true,
-        harness: "opencode",
-        provider: "opencode-go",
         updatedAt: "2026-01-01T00:00:00.000Z",
       }) ?? "",
       /apiKey/i,
@@ -71,7 +61,6 @@ describe("agent config store", () => {
         version: 1,
         enabled: true,
         harness: "opencode",
-        provider: "opencode-go",
         apiKey: "k",
         updatedAt: "2026-01-01T00:00:00.000Z",
       }),
@@ -79,14 +68,24 @@ describe("agent config store", () => {
     );
   });
 
-  it("normalizes legacy provider aliases on merge", () => {
-    const next = mergeAgentConfigUpdate(null, {
-      enabled: true,
-      harness: "opencode",
-      provider: "opencode" as never,
-      apiKey: "k",
-    });
-    assert.equal(next.provider, "opencode-go");
+  it("defaults and normalizes OpenCode provider on merge", () => {
+    assert.equal(
+      mergeAgentConfigUpdate(null, {
+        enabled: true,
+        harness: "opencode",
+        apiKey: "k",
+      }).provider,
+      "opencode-go",
+    );
+    assert.equal(
+      mergeAgentConfigUpdate(null, {
+        enabled: true,
+        harness: "opencode",
+        provider: "opencode" as never,
+        apiKey: "k",
+      }).provider,
+      "opencode-go",
+    );
   });
 
   it("keeps previous apiKey when update omits it", () => {
@@ -246,20 +245,19 @@ describe("agent runtime controller", () => {
     assert.equal(loaded.apiKey, "sk-ant-test");
   });
 
-  it("rejects enabling OpenCode without provider", async () => {
+  it("enables OpenCode with apiKey only (provider defaults to opencode-go)", async () => {
     const cfg = testConfig({ WORKSPACES_PATH: root });
     const agent = createAgentRuntimeController(cfg, testLogger(), {
-      configPath: path.join(root, "bad-opencode.json"),
+      configPath: path.join(root, "opencode-default-provider.json"),
     });
     await agent.boot();
-    await assert.rejects(
-      () =>
-        agent.apply({
-          enabled: true,
-          harness: "opencode",
-          apiKey: "oc-key",
-        }),
-      /provider/i,
-    );
+    const view = await agent.apply({
+      enabled: false,
+      harness: "opencode",
+      apiKey: "oc-key",
+    });
+    assert.equal(view.harness, "opencode");
+    assert.equal(view.provider, "opencode-go");
+    assert.equal(view.hasApiKey, true);
   });
 });

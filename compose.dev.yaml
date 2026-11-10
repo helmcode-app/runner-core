@@ -5,7 +5,7 @@
 #        export HOST_REPO=/Users/you/Developer/src/github.com/org/my-repo
 #      Omit HOST_REPO to use a Docker volume and the setup page (pair + GitHub).
 #   2. Optional secrets / overrides in runner-core/.env (auto-loaded if present):
-#        AGENT_PROVIDER, AGENT_API_KEY, …
+#        AGENT_API_KEY, AGENT_DEFAULT_MODEL, …
 #   3. Start:
 #        docker compose -f compose.yaml -f compose.dev.yaml up --build dev
 #   4. Probe:

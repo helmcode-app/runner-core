@@ -164,6 +164,10 @@ export function mergeAgentConfigUpdate(
     const provider = normalizeAgentProviderId(previous.provider);
     if (provider) next.provider = provider;
   }
+  // OpenCode has a single Helm provider — fill it when the client omits it.
+  if (next.harness === "opencode" && !next.provider) {
+    next.provider = "opencode-go";
+  }
 
   if (update.apiKey !== undefined) {
     const key = update.apiKey.trim();
@@ -191,11 +195,15 @@ export function mergeAgentConfigUpdate(
 
 export function validateAgentConfig(config: PersistedAgentConfig): string | null {
   if (!config.enabled) return null;
+  if (config.harness === "opencode") {
+    // Provider defaults to opencode-go — only the Go API key is required.
+    if (!config.apiKey?.trim()) {
+      return "apiKey is required when harness=opencode (connect OpenCode Go; free opencode/* models still work)";
+    }
+    return null;
+  }
   if (harnessNeedsProvider(config.harness) && !config.provider) {
     return `provider is required when harness=${config.harness}`;
-  }
-  if (config.harness === "opencode" && !config.apiKey?.trim()) {
-    return "apiKey is required when harness=opencode (connect OpenCode Go; free opencode/* models still work)";
   }
   return null;
 }

@@ -23,14 +23,13 @@ Used only when `agent.json` is missing (CI / compose). Same fields as the PUT bo
 
 | Kind | harness | provider | apiKey |
 |------|---------|----------|--------|
-| Multi-provider shell | `opencode` (later `pi` / `goose`) | **required** (`opencode-go`) | OpenCode Go API key (also unlocks free `opencode/*`) |
+| OpenCode | `opencode` | defaults to `opencode-go` (optional env) | OpenCode Go API key (also unlocks free `opencode/*`) |
 | Single-vendor product | `claude` / `codex` / `cursor` / `grok` | **unused** | key for that product |
 
 ```bash
-# OpenCode Go — free opencode/* models work on the same connection
+# OpenCode — free opencode/* models work on the same Go connection
 SESSIONS_ENABLED=true
 AGENT_HARNESS=opencode
-AGENT_PROVIDER=opencode-go
 AGENT_API_KEY=oc-…
 AGENT_DEFAULT_MODEL=opencode/beam-free
 ```

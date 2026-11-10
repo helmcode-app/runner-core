@@ -28,11 +28,11 @@ primary_region = "iad"
   SEED_GIT_FIXTURE = "true"
   # Non-expiring reusable enroll code for App Review notes.
   REVIEW_SETUP_CODE = "HELM-R3V9"
-  # Bootstrap OpenCode with Go; set AGENT_API_KEY via `fly secrets`.
-  # Leave false until the secret exists, or enable from the app (PUT /v1/agent).
+  # Bootstrap OpenCode; set AGENT_API_KEY via `fly secrets`.
+  # Provider defaults to opencode-go. Leave SESSIONS_ENABLED false until the secret exists,
+  # or enable from the app (PUT /v1/agent).
   SESSIONS_ENABLED = "false"
   AGENT_HARNESS = "opencode"
-  AGENT_PROVIDER = "opencode-go"
   AGENT_DEFAULT_MODEL = "opencode/beam-free"
 
 [http_service]

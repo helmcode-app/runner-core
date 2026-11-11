@@ -66,6 +66,33 @@ Copy [`.env.example`](./.env.example) to `.env` and fill what you need. Empty op
 | `runtime` | Production daemon |
 | `smoke` | Runtime + in-container git fixture |
 
+### Prebuilt images (GHCR)
+
+CI builds the `runtime` image for `linux/amd64` and `linux/arm64` and publishes to GitHub Container Registry on every `main` push and on git tags:
+
+```text
+ghcr.io/helmcode-app/runner-core:latest
+ghcr.io/helmcode-app/runner-core:<tag>    # e.g. 1.0
+ghcr.io/helmcode-app/runner-core:sha-<sha>
+```
+
+```bash
+# Pull and run (pair via setup page, or mount a host repo)
+docker pull ghcr.io/helmcode-app/runner-core:latest
+docker run --rm -p 18080:8080 \
+  -e HELM_MODE=open-core \
+  -e HOST=0.0.0.0 \
+  -e PORT=8080 \
+  -e VFS_ENABLED=true \
+  ghcr.io/helmcode-app/runner-core:latest
+# → http://127.0.0.1:18080
+```
+
+If the package is private, authenticate once: `echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin`.  
+In the GitHub UI, set the `runner-core` package visibility to **Public** for anonymous pulls.
+
+### Build locally
+
 ```bash
 docker build --target runtime -t helmcode/runner-core:local .
 docker compose run --rm --build test
